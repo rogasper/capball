@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /**
  * The only module allowed to import `@tauri-apps/*`.
@@ -37,6 +38,7 @@ export type MediaProbe = {
 };
 
 export type JobState = "running" | "done" | "failed" | "cancelled";
+export type ExportMode = "fast" | "accurate";
 export type JobMode = "remux" | "transcode";
 
 export type JobEvent = {
@@ -83,6 +85,45 @@ export const ipc = {
 
   cancelJob(jobId: string): Promise<void> {
     return invoke("cancel_job", { jobId });
+  },
+
+  /** Cuts one clip to a destination the user chose. Refuses to overwrite. */
+  startExport(
+    input: string,
+    output: string,
+    startMs: number,
+    endMs: number,
+    mode: ExportMode,
+  ): Promise<MediaJob> {
+    return invoke("start_export", { input, output, startMs, endMs, mode });
+  },
+
+  /** Joins rendered clips into one file, in the order given. */
+  startConcat(inputs: string[], output: string, totalMs: number): Promise<MediaJob> {
+    return invoke("start_concat", { inputs, output, totalMs });
+  },
+
+  /** Opens a URL in the user's browser, e.g. the FFmpeg download page. */
+  openExternal(url: string): Promise<void> {
+    return openUrl(url);
+  },
+
+  /** Shows a written file in Finder, so the user can see what was produced. */
+  revealInFolder(path: string): Promise<void> {
+    return revealItemInDir(path);
+  },
+
+  /** Where clips go unless the user chooses elsewhere. Created on demand. */
+  defaultExportDir(): Promise<string> {
+    return invoke("default_export_dir");
+  },
+
+  pickFolder(): Promise<string | null> {
+    return open({
+      directory: true,
+      multiple: false,
+      title: "Choose where to save clips",
+    }) as Promise<string | null>;
   },
 
   /**

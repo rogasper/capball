@@ -2,6 +2,7 @@ import { Film } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EventList } from "@/features/events/EventList";
+import { ExportPanel } from "@/features/export/ExportPanel";
 import { MatchList } from "@/features/library/MatchList";
 import { MatchPanel } from "@/features/library/MatchPanel";
 import { PlayerStage } from "@/features/player/PlayerStage";
@@ -117,6 +118,7 @@ export function AppShell() {
               <TabsTrigger value="events">Events</TabsTrigger>
               <TabsTrigger value="match">Match</TabsTrigger>
               <TabsTrigger value="tags">Tags</TabsTrigger>
+              <TabsTrigger value="export">Export</TabsTrigger>
             </TabsList>
             <TabsContent value="events" className="pt-4">
               <EventList />
@@ -126,6 +128,9 @@ export function AppShell() {
             </TabsContent>
             <TabsContent value="tags" className="pt-4">
               <TaxonomyPanel />
+            </TabsContent>
+            <TabsContent value="export" className="pt-4">
+              <ExportPanel />
             </TabsContent>
           </Tabs>
         </aside>

@@ -2,9 +2,10 @@ mod commands;
 mod jobs;
 
 use commands::{
-    check_media_tools, extract_thumbnail, file_status, probe_media, register_asset_path,
+    check_media_tools, default_export_dir, extract_thumbnail, file_status, probe_media,
+    register_asset_path,
 };
-use jobs::{cancel_job, start_media_job, JobRegistry};
+use jobs::{cancel_job, start_concat, start_export, start_media_job, JobRegistry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,7 +20,10 @@ pub fn run() {
             file_status,
             probe_media,
             start_media_job,
+            start_export,
+            start_concat,
             extract_thumbnail,
+            default_export_dir,
             cancel_job
         ])
         .run(tauri::generate_context!())

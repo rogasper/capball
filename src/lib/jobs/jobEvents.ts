@@ -21,7 +21,12 @@ function ensureListener(): Promise<unknown> {
     listener = ipc.onJobEvent((event) => {
       const handlers = pending.get(event.jobId);
       if (!handlers) {
-        finished.set(event.jobId, event);
+        // The id is only known after the job has started, so a terminal event
+        // can arrive before anyone is awaiting it and must be kept. Progress
+        // must not be: buffering a "running" event would hand the caller a
+        // non-terminal result, which reads as "the job did not finish" and
+        // aborts whatever was sequencing it.
+        if (event.state !== "running") finished.set(event.jobId, event);
         return;
       }
       if (event.state === "running") {

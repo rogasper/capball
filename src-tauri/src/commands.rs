@@ -443,3 +443,22 @@ pub fn extract_thumbnail(
 
     Ok(out.to_string_lossy().to_string())
 }
+
+/// Where clips go unless the user picks somewhere else.
+///
+/// A media tool having a sensible default saves a dialog on every export; the
+/// folder is shown in the UI, so nothing is hidden.
+#[tauri::command]
+pub fn default_export_dir(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+
+    let base = app
+        .path()
+        .video_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|err| format!("no place to save clips: {err}"))?;
+
+    let dir = base.join("capball");
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir.to_string_lossy().to_string())
+}
