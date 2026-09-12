@@ -1,8 +1,200 @@
+import { sql } from "drizzle-orm";
+import {
+  type AnySQLiteColumn,
+  index,
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+
 /**
- * Drizzle schema for the capball local library.
+ * The capball library schema (plans/technical-design.md §7).
  *
- * The tables described in plans/technical-design.md §7 land in M2. This file
- * exists at M0 so the Drizzle toolchain (schema path, migration output, and the
- * sqlite-proxy client) is wired and verified before the schema is written.
+ * Times that describe footage are integer milliseconds (`_ms`); bookkeeping
+ * timestamps are Unix seconds. Foreign keys cascade where the domain says a
+ * child cannot outlive its parent, and foreign key enforcement is on because
+ * sqlx enables `PRAGMA foreign_keys` by default.
  */
-export {};
+
+const createdAt = integer("created_at").notNull().default(sql`(unixepoch())`);
+
+export const teams = sqliteTable(
+  "teams",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    shortName: text("short_name"),
+    color: text("color"),
+    createdAt,
+  },
+  (table) => [uniqueIndex("teams_name_unique").on(table.name)],
+);
+
+export const players = sqliteTable(
+  "players",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    teamId: integer("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    shirtNumber: integer("shirt_number"),
+    position: text("position"),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex("players_team_name_unique").on(table.teamId, table.name),
+    index("players_team_idx").on(table.teamId),
+  ],
+);
+
+export const matches = sqliteTable(
+  "matches",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    homeTeamId: integer("home_team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "restrict" }),
+    awayTeamId: integer("away_team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "restrict" }),
+    competition: text("competition"),
+    season: text("season"),
+    kickoffAt: integer("kickoff_at"),
+    venue: text("venue"),
+    notes: text("notes"),
+    createdAt,
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [index("matches_kickoff_idx").on(table.kickoffAt)],
+);
+
+export const videos = sqliteTable(
+  "videos",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    matchId: integer("match_id")
+      .notNull()
+      .references(() => matches.id, { onDelete: "cascade" }),
+    /** Where the user's file lives. */
+    path: text("path").notNull(),
+    /** A prepared copy in the app cache, when the original cannot be played. */
+    playbackPath: text("playback_path"),
+    fileName: text("file_name").notNull(),
+    sizeBytes: integer("size_bytes"),
+    durationMs: integer("duration_ms").notNull().default(0),
+    width: integer("width"),
+    height: integer("height"),
+    fpsNum: integer("fps_num"),
+    fpsDen: integer("fps_den"),
+    videoCodec: text("video_codec"),
+    audioCodec: text("audio_codec"),
+    container: text("container"),
+    createdAt,
+  },
+  (table) => [index("videos_match_idx").on(table.matchId)],
+);
+
+export const tagCategories = sqliteTable(
+  "tag_categories",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    color: text("color"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt,
+  },
+  (table) => [uniqueIndex("tag_categories_name_unique").on(table.name)],
+);
+
+export const tags = sqliteTable(
+  "tags",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    categoryId: integer("category_id")
+      .notNull()
+      .references(() => tagCategories.id, { onDelete: "cascade" }),
+    parentId: integer("parent_id").references((): AnySQLiteColumn => tags.id, {
+      onDelete: "cascade",
+    }),
+    name: text("name").notNull(),
+    color: text("color"),
+    /** The key that creates an event with this tag; unique across the taxonomy. */
+    shortcutKey: text("shortcut_key"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex("tags_shortcut_unique").on(table.shortcutKey),
+    index("tags_category_idx").on(table.categoryId),
+    index("tags_parent_idx").on(table.parentId),
+  ],
+);
+
+export const events = sqliteTable(
+  "events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    matchId: integer("match_id")
+      .notNull()
+      .references(() => matches.id, { onDelete: "cascade" }),
+    videoId: integer("video_id")
+      .notNull()
+      .references(() => videos.id, { onDelete: "cascade" }),
+    /** Deleting a tag deletes its events — decided in PRD OQ-6. */
+    tagId: integer("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+    teamId: integer("team_id").references(() => teams.id, { onDelete: "set null" }),
+    playerId: integer("player_id").references(() => players.id, { onDelete: "set null" }),
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+    notes: text("notes"),
+    createdAt,
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("events_match_start_idx").on(table.matchId, table.startMs),
+    index("events_tag_idx").on(table.tagId),
+    index("events_team_idx").on(table.teamId),
+  ],
+);
+
+export const clips = sqliteTable(
+  "clips",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+    status: text("status").notNull().default("pending"),
+    error: text("error"),
+    createdAt,
+  },
+  (table) => [index("clips_event_idx").on(table.eventId)],
+);
+
+/** Reserved for R1 telestration; present from the start so R1 needs no migration. */
+export const annotations = sqliteTable(
+  "annotations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    tMs: integer("t_ms").notNull(),
+    kind: text("kind").notNull(),
+    dataJson: text("data_json").notNull(),
+    createdAt,
+  },
+  (table) => [index("annotations_event_idx").on(table.eventId)],
+);
+
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});

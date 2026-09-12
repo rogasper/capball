@@ -2,7 +2,8 @@ import { render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import App from "@/App";
 
-// The IPC layer is the only module that talks to Tauri, so mocking it is enough
+// The IPC layer is the only module that talks to Tauri, and the database bridge
+// is the only module that loads the SQL plugin, so mocking those two is enough
 // to render the real UI in a plain DOM.
 vi.mock("@/lib/ipc", () => ({
   ipc: {
@@ -22,12 +23,25 @@ vi.mock("@/lib/ipc", () => ({
   },
 }));
 
+vi.mock("@/lib/ipc/database", () => ({
+  execute: vi.fn().mockResolvedValue(undefined),
+  select: vi.fn().mockResolvedValue([]),
+}));
+
 describe("App", () => {
-  it("names the product and offers the import action", async () => {
+  it("names the product and shows an empty library", async () => {
     render(<App />);
 
     expect(screen.getByRole("heading", { name: "capball" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: /import a match video/i })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "Matches" })).toBeInTheDocument();
+    expect(await screen.findByText(/no matches yet/i)).toBeInTheDocument();
+  });
+
+  it("offers both the match and tag panels", async () => {
+    render(<App />);
+
+    expect(await screen.findByRole("tab", { name: "Match" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Tags" })).toBeInTheDocument();
   });
 
   it("tells the user FFmpeg is required when it is missing", async () => {

@@ -239,7 +239,8 @@ pub fn start_media_job(
                 Ok(jobs) => jobs,
                 Err(_) => return,
             };
-            jobs.remove(&wait_job).and_then(|mut child| child.wait().ok())
+            jobs.remove(&wait_job)
+                .and_then(|mut child| child.wait().ok())
         };
 
         let stderr_message = stderr_tail

@@ -153,9 +153,7 @@ pub fn probe_media(path: String) -> Result<MediaProbe, String> {
     let frame_rate = video
         .and_then(|s| s.get("avg_frame_rate").and_then(|v| v.as_str()))
         .filter(|s| *s != "0/0")
-        .or_else(|| {
-            video.and_then(|s| s.get("r_frame_rate").and_then(|v| v.as_str()))
-        })
+        .or_else(|| video.and_then(|s| s.get("r_frame_rate").and_then(|v| v.as_str())))
         .and_then(parse_rational);
 
     Ok(MediaProbe {

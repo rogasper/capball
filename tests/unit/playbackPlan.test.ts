@@ -62,4 +62,22 @@ describe("planPlayback", () => {
     expect(plan.reason).toContain("vp9");
     expect(plan.reason).toContain("opus");
   });
+
+  it("plays a real 1080p60 match recording directly", () => {
+    // Values taken from a real 522 MB match file: MP4, H.264, AAC, 60000/1001 fps.
+    const plan = planPlayback(
+      probe({
+        container: "mov,mp4,m4a,3gp,3g2,mj2",
+        videoCodec: "h264",
+        audioCodec: "aac",
+        width: 1920,
+        height: 1080,
+        fpsNum: 60_000,
+        fpsDen: 1001,
+        durationMs: 861_737,
+        sizeBytes: 538_023_704,
+      }),
+    );
+    expect(plan.kind).toBe("direct");
+  });
 });
