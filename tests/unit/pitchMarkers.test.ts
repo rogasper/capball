@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickMarkers } from "@/features/pitch/markers";
+import { markerOffsets, pickMarkers } from "@/features/pitch/markers";
 import { normalizePoint, type Rect } from "@/lib/annotate/geometry";
 
 /**
@@ -44,5 +44,36 @@ describe("pickMarkers", () => {
       rect,
     );
     expect(markers.map((marker) => marker.feature)).toEqual(["centre-spot", "corner-left-top"]);
+  });
+});
+
+describe("markerOffsets", () => {
+  it("puts a player's marker exactly where that player was clicked", () => {
+    const click = [rect.x + 310, 150];
+    const [imageU, imageV] = normalizePoint(
+      { x: 0, y: 0, w: rect.w, h: rect.h },
+      click[0] - rect.x,
+      click[1] - rect.y,
+    );
+
+    const [marker] = markerOffsets([{ id: 1, imageU, imageV }], rect);
+
+    // The wrapper carries the picture's box, so this is the same contract the
+    // calibration markers follow: adding the offset here as well lands the
+    // marker a letterbox away from the click.
+    expect(rect.x + marker.point[0]).toBeCloseTo(click[0]);
+    expect(rect.y + marker.point[1]).toBeCloseTo(click[1]);
+  });
+
+  it("keeps the id, so a marker can be traced to its row", () => {
+    const markers = markerOffsets(
+      [
+        { id: 4, imageU: 0.2, imageV: 0.3 },
+        { id: 9, imageU: 0.7, imageV: 0.8 },
+      ],
+      rect,
+    );
+    expect(markers.map((marker) => marker.id)).toEqual([4, 9]);
+    expect(markers[1].point[1]).toBeCloseTo(0.8 * rect.h);
   });
 });

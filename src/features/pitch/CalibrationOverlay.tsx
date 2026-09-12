@@ -1,6 +1,5 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef } from "react";
 import { useContentRect } from "@/features/player/useContentRect";
-import { normalizePoint, type Point, type Rect } from "@/lib/annotate/geometry";
 import type { Primitive } from "@/lib/annotate/primitives";
 import { outlinePrimitives } from "@/lib/pitch/project";
 import { type Canvas2D, renderPrimitives } from "@/lib/render/canvas";
@@ -45,8 +44,6 @@ export function CalibrationOverlay({
     [probe?.width, probe?.height],
   );
 
-  const frameRect: Rect = { x: 0, y: 0, w: rect.w, h: rect.h };
-
   /** Picking needs a usable frame size; without it there is no pixel space. */
   const solvable = frame.width > 0 && frame.height > 0;
   const outcome = useMemo(
@@ -58,6 +55,10 @@ export function CalibrationOverlay({
     const canvas = canvasRef.current;
     if (!canvas || rect.w <= 0 || rect.h <= 0) return;
 
+    // The bitmap has to be whole pixels while the CSS box may not be, so the
+    // transform is derived from both: using the device ratio alone would squash
+    // the drawing by the rounding error and leave the pitch lines a fraction off
+    // the points they are meant to pass through.
     const ratio = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.round(rect.w * ratio));
     const height = Math.max(1, Math.round(rect.h * ratio));
@@ -66,7 +67,7 @@ export function CalibrationOverlay({
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.setTransform(width / rect.w, 0, 0, height / rect.h, 0, 0);
     ctx.clearRect(0, 0, rect.w, rect.h);
 
     if (!outcome?.ok || frame.width <= 0) return;
@@ -91,10 +92,14 @@ export function CalibrationOverlay({
   const picking = pendingFeature !== null;
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!picking || rect.w <= 0) return;
+    if (!picking) return;
+    // The canvas is sized to the picture rect, so its own box *is* the frame.
+    // Measuring against it can never disagree with where the click landed, and
+    // it cannot go stale the way a rect held in React state can.
     const box = event.currentTarget.getBoundingClientRect();
-    const px: Point = [event.clientX - box.left, event.clientY - box.top];
-    const [imageU, imageV] = normalizePoint(frameRect, px[0], px[1]);
+    if (box.width <= 0 || box.height <= 0) return;
+    const imageU = (event.clientX - box.left) / box.width;
+    const imageV = (event.clientY - box.top) / box.height;
     void addPick(imageU, imageV);
   };
 

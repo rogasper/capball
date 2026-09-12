@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { applyFilters, isFilterActive, useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { usePositionStore } from "@/stores/positionStore";
 
 function NotesField({ eventId, notes }: { eventId: number; notes: string | null }) {
   const updateNotes = useEventStore((state) => state.updateNotes);
@@ -79,12 +80,16 @@ function EventThumbnail({ event, sourcePath }: { event: EventRow; sourcePath: st
 function DeleteEventDialog({ event }: { event: EventRow }) {
   const remove = useEventStore((state) => state.remove);
   const countDrawings = useAnnotationStore((state) => state.countDrawings);
-  const [drawings, setDrawings] = useState<number | null>(null);
+  const countPositions = usePositionStore((state) => state.countFor);
+  const [impact, setImpact] = useState<{ drawings: number; positions: number } | null>(null);
 
   return (
     <AlertDialog
       onOpenChange={(open) => {
-        if (open) void countDrawings(event.id).then(setDrawings);
+        if (!open) return;
+        void Promise.all([countDrawings(event.id), countPositions(event.id)]).then(
+          ([drawings, positions]) => setImpact({ drawings, positions }),
+        );
       }}
     >
       <AlertDialogTrigger asChild>
@@ -101,9 +106,20 @@ function DeleteEventDialog({ event }: { event: EventRow }) {
           <AlertDialogTitle>Delete this event?</AlertDialogTitle>
           <AlertDialogDescription>
             {event.tagName} at {formatTimecode(event.anchorMs)} is removed from the match.
-            {drawings !== null && drawings > 0
-              ? ` Its ${drawings} drawing${drawings === 1 ? "" : "s"} go with it.`
+            {impact
+              ? [
+                  impact.drawings > 0
+                    ? `${impact.drawings} drawing${impact.drawings === 1 ? "" : "s"}`
+                    : null,
+                  impact.positions > 0
+                    ? `${impact.positions} position${impact.positions === 1 ? "" : "s"}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" and ")
+                  .replace(/^./, (first) => first.toUpperCase())
               : ""}
+            {impact && (impact.drawings > 0 || impact.positions > 0) ? " go with it." : ""}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

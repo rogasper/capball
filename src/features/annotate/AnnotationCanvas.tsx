@@ -134,6 +134,10 @@ export function AnnotationCanvas({
     const canvas = canvasRef.current;
     if (!canvas || frame.w <= 0 || frame.h <= 0) return;
 
+    // The bitmap has to be whole pixels while the CSS box may not be, so the
+    // transform is derived from both: using the device ratio alone would squash
+    // the drawing by the rounding error and leave the pitch lines a fraction off
+    // the points they are meant to pass through.
     const ratio = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.round(frame.w * ratio));
     const height = Math.max(1, Math.round(frame.h * ratio));
@@ -145,7 +149,7 @@ export function AnnotationCanvas({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.setTransform(width / frame.w, 0, 0, height / frame.h, 0, 0);
     ctx.clearRect(0, 0, frame.w, frame.h);
 
     const primitives = toPrimitives(annotations, playback.timeMs, windowContext());

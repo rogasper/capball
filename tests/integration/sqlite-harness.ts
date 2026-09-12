@@ -31,6 +31,7 @@ const TABLES = [
   "annotations",
   "calibration_points",
   "calibrations",
+  "positions",
   "videos",
   "matches",
   "players",

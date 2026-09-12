@@ -20,3 +20,22 @@ export function pickMarkers(
     point: [pick.imageU * rect.w, pick.imageV * rect.h],
   }));
 }
+
+/**
+ * The same contract for player positions.
+ *
+ * Deliberately the same shape as `pickMarkers`: both layers live in a wrapper
+ * that carries the picture's box, so both must return positions inside it. The
+ * calibration markers once added the offset here *and* in the wrapper, which put
+ * every dot a letterbox away from its click; sharing one tested helper is how
+ * that cannot come back for the positions.
+ */
+export function markerOffsets(
+  items: { id: number; imageU: number; imageV: number }[],
+  rect: Rect,
+): { id: number; point: [number, number] }[] {
+  return items.map((item) => ({
+    id: item.id,
+    point: [item.imageU * rect.w, item.imageV * rect.h],
+  }));
+}

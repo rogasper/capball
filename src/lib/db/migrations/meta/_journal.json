@@ -29,6 +29,13 @@
       "when": 1789247667241,
       "tag": "0003_calibrations",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789251480243,
+      "tag": "0004_positions",
+      "breakpoints": true
     }
   ]
 }

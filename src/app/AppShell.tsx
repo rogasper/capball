@@ -26,6 +26,7 @@ import { useAnnotationStore } from "@/stores/annotationStore";
 import { useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { usePositionStore } from "@/stores/positionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSquadStore } from "@/stores/squadStore";
 import { useTagStore } from "@/stores/tagStore";
@@ -34,6 +35,7 @@ export function AppShell() {
   const hasVideo = useLibraryStore((state) => state.playbackUrl) !== null;
   const currentMatchId = useLibraryStore((state) => state.currentMatchId);
   const activeVideoId = useLibraryStore((state) => state.activeVideoId);
+  const selectedEventId = useAnnotationStore((state) => state.eventId);
   const homeTeamId = useLibraryStore((state) => state.currentMatch?.homeTeamId);
   const awayTeamId = useLibraryStore((state) => state.currentMatch?.awayTeamId);
 
@@ -104,6 +106,16 @@ export function AppShell() {
       widthM: settings.pitchWidthM,
     });
   }, [activeVideoId]);
+
+  // Positions belong to the event the drawing panel has open, so they follow it.
+  useEffect(() => {
+    const positions = usePositionStore.getState();
+    if (selectedEventId === null) {
+      positions.clear();
+      return;
+    }
+    void positions.load(selectedEventId);
+  }, [selectedEventId]);
 
   // Squads are loaded here so the tagging context always has both rosters.
   useEffect(() => {

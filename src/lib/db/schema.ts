@@ -280,6 +280,56 @@ export const calibrationPoints = sqliteTable(
   (table) => [index("calibration_points_calibration_idx").on(table.calibrationId)],
 );
 
+/**
+ * Where a player was, at the moment of an event (R1, FR-30.3).
+ *
+ * The pitch coordinates are what the user asserted, and the click is kept beside
+ * them as provenance: a calibration change must never silently reinterpret a
+ * stored position (FR-30.2), so `xM`/`yM` are neither derived on read nor
+ * rewritten when the calibration is adjusted.
+ *
+ * There is no `t_ms`: a position belongs to its event and uses the event's
+ * anchor, which keeps it with the moment if that moment is corrected. One
+ * position per player per event is enforced by the unique index.
+ */
+export const positions = sqliteTable(
+  "positions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Client-generated identity, which is what makes transfer idempotent. */
+    uid: text("uid").notNull(),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    playerId: integer("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    /**
+     * The team as it was on the day. A player can move clubs, and the shape of a
+     * play must stay what it was rather than following a later transfer.
+     */
+    teamId: integer("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    /** Which calibration produced this, or null if that calibration was deleted. */
+    calibrationId: integer("calibration_id").references(() => calibrations.id, {
+      onDelete: "set null",
+    }),
+    /** The clicked point, normalised to the frame, kept for provenance. */
+    imageU: real("image_u").notNull(),
+    imageV: real("image_v").notNull(),
+    /** The position on the pitch, in metres from the centre. */
+    xM: real("x_m").notNull(),
+    yM: real("y_m").notNull(),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex("positions_uid_unique").on(table.uid),
+    uniqueIndex("positions_event_player_unique").on(table.eventId, table.playerId),
+    index("positions_event_idx").on(table.eventId),
+  ],
+);
+
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
