@@ -1,70 +1,11 @@
 import { CornerDownLeft, Undo2, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { playback } from "@/lib/playback";
 import { formatTimecode } from "@/lib/time/timecode";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 
 const ADJUST_MS = 1_000;
-
-/**
- * A thin rail showing where the captures landed, plus the playhead.
- *
- * This is deliberately not the timeline: no zoom, pan, filtering, or range
- * selection — that is M4. It exists so a capture is visible the instant it
- * happens (FR-5.1).
- */
-function Rail() {
-  const events = useEventStore((state) => state.events);
-  const lastCapturedId = useEventStore((state) => state.lastCapturedId);
-  const durationMs = useLibraryStore((state) => state.probe?.durationMs ?? 0);
-  const playhead = useRef<HTMLDivElement>(null);
-
-  useEffect(
-    () =>
-      playback.onFrame((timeMs) => {
-        const element = playhead.current;
-        if (!element) return;
-        const share = durationMs > 0 ? Math.min(1, Math.max(0, timeMs / durationMs)) : 0;
-        element.style.left = `${share * 100}%`;
-      }),
-    [durationMs],
-  );
-
-  return (
-    <div
-      className="relative h-8 w-full rounded-md border border-border bg-background"
-      role="img"
-      aria-label={`${events.length} tagged moments`}
-    >
-      {durationMs > 0 &&
-        events.map((event) => (
-          <span
-            key={event.id}
-            className="absolute top-1 bottom-1 w-1 rounded-full"
-            style={{
-              // Markers sit on the tagged moment, not on the start of the clip
-              // range, so the rail agrees with what the list shows.
-              left: `${Math.min(100, (event.anchorMs / durationMs) * 100)}%`,
-              background: event.tagColor ?? "var(--muted-foreground)",
-              outline: event.id === lastCapturedId ? "1px solid var(--foreground)" : undefined,
-            }}
-            title={`${event.tagName} · ${formatTimecode(event.anchorMs)} (clip ${formatTimecode(
-              event.startMs,
-            )} → ${formatTimecode(event.endMs)})`}
-          />
-        ))}
-
-      <div
-        ref={playhead}
-        className="absolute top-0 bottom-0 w-px bg-primary"
-        style={{ left: "0%" }}
-        aria-hidden="true"
-      />
-    </div>
-  );
-}
 
 /** The capture that was just made, correctable without leaving the moment (FR-5.3). */
 function LastCapture() {
@@ -118,16 +59,22 @@ function LastCapture() {
   );
 }
 
-export function CaptureRail() {
+/**
+ * Status for the capture keys: what to do, what was just captured, and anything
+ * that went wrong. The markers themselves live in the timeline.
+ */
+export function CaptureStatus() {
   const hasVideo = useLibraryStore((state) => state.activeVideoId) !== null;
   const events = useEventStore((state) => state.events);
   const lastCapturedId = useEventStore((state) => state.lastCapturedId);
   const error = useEventStore((state) => state.error);
   const clearError = useEventStore((state) => state.clearError);
 
+  const count = useMemo(() => events.length, [events]);
+
   return (
-    <div className="space-y-2 border-t border-border bg-card px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
+    <div className="space-y-2 border-t border-border bg-card px-4 pb-3">
+      <div className="flex items-center justify-between gap-3 pt-2">
         <span className="flex items-center gap-1.5 text-label text-muted-foreground">
           <CornerDownLeft className="size-3" aria-hidden="true" />
           {hasVideo
@@ -135,11 +82,9 @@ export function CaptureRail() {
             : "Add a video to start capturing"}
         </span>
         <span className="text-caption tabular-nums text-muted-foreground">
-          {events.length} event{events.length === 1 ? "" : "s"}
+          {count} event{count === 1 ? "" : "s"}
         </span>
       </div>
-
-      <Rail />
 
       {lastCapturedId !== null && <LastCapture />}
 

@@ -58,7 +58,7 @@ fn emit(app: &AppHandle, event: JobEvent) {
 }
 
 /// FNV-1a over the path, size and mtime: a stable cache key for one source file.
-fn fingerprint(path: &str) -> String {
+pub(crate) fn fingerprint(path: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut mix = |value: u64| {
         hash ^= value;
@@ -80,13 +80,19 @@ fn fingerprint(path: &str) -> String {
 
 /// Prepared files live in the app cache directory, never beside the user's footage.
 fn prepared_path(app: &AppHandle, input: &str) -> Result<PathBuf, String> {
+    let dir = cache_dir(app)?.join("prepared");
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir.join(format!("{}.mp4", fingerprint(input))))
+}
+
+/// Everything derived from a source file lives here, never beside the footage.
+pub(crate) fn cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_cache_dir()
-        .map_err(|err| format!("no cache directory available: {err}"))?
-        .join("prepared");
+        .map_err(|err| format!("no cache directory available: {err}"))?;
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    Ok(dir.join(format!("{}.mp4", fingerprint(input))))
+    Ok(dir)
 }
 
 fn ffmpeg_args(mode: JobMode, input: &str, output: &PathBuf) -> Vec<String> {

@@ -3,11 +3,12 @@ import type { Tag } from "@/lib/db/queries/taxonomy";
 import { isTypingTarget } from "@/lib/keyboard/typing";
 import { playback } from "@/lib/playback";
 import { findTagByShortcut } from "@/lib/taxonomy/rules";
+import { clipRange } from "@/lib/time/timecode";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useSquadStore } from "@/stores/squadStore";
 import { useTagStore } from "@/stores/tagStore";
+import { buildEventDraft } from "./captureContext";
 
 /**
  * One keystroke, one event (FR-5).
@@ -17,51 +18,23 @@ import { useTagStore } from "@/stores/tagStore";
  * state — so a capture records the moment the key was pressed, not the moment
  * the UI last rendered.
  */
-
 async function captureNow(tag: Tag): Promise<void> {
-  const library = useLibraryStore.getState();
-  const events = useEventStore.getState();
+  const { insert, reportError } = useEventStore.getState();
   const settings = useSettingsStore.getState();
-  const taxonomy = useTagStore.getState();
-  const squad = useSquadStore.getState();
+  const durationMs = useLibraryStore.getState().probe?.durationMs ?? playback.durationMs;
 
-  const matchId = library.currentMatchId;
-  const videoId = library.activeVideoId;
+  // One reading of the playhead, so the moment and the range around it agree.
+  const anchorMs = playback.timeMs;
+  const times = {
+    anchorMs,
+    ...clipRange(anchorMs, settings.preRollMs, settings.postRollMs, durationMs),
+  };
 
-  if (!matchId) {
-    events.reportError("Create or open a match before tagging.");
-    return;
+  try {
+    await insert(buildEventDraft(tag, times));
+  } catch (error) {
+    reportError(error instanceof Error ? error.message : String(error));
   }
-  if (!videoId) {
-    events.reportError("Add a video to this match before tagging.");
-    return;
-  }
-
-  const teamId = taxonomy.activeTeamId;
-  const playerId = taxonomy.activePlayerId;
-  const team = teamId === null ? undefined : squad.teams[teamId];
-  const player =
-    playerId === null
-      ? undefined
-      : (squad.players[teamId ?? -1] ?? []).find((candidate) => candidate.id === playerId);
-
-  await events.capture({
-    matchId,
-    videoId,
-    tagId: tag.id,
-    tagName: tag.name,
-    tagColor: tag.color,
-    categoryName:
-      taxonomy.categories.find((category) => category.id === tag.categoryId)?.name ?? "",
-    teamId,
-    teamName: team?.name ?? null,
-    playerId,
-    playerName: player?.name ?? null,
-    anchorMs: playback.timeMs,
-    preRollMs: settings.preRollMs,
-    postRollMs: settings.postRollMs,
-    durationMs: library.probe?.durationMs ?? playback.durationMs,
-  });
 }
 
 export function useCaptureKeys(enabled: boolean): void {

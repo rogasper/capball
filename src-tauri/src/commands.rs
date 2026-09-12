@@ -383,3 +383,63 @@ mod tests {
         assert_eq!(faststart_in(&mut Cursor::new(bytes), total), None);
     }
 }
+
+/// Renders one frame to a cached JPEG and grants it to the asset protocol.
+///
+/// The path is keyed by the source fingerprint and the timestamp, so a given
+/// moment is rendered once per file and reused afterwards (FR-12).
+#[tauri::command]
+pub fn extract_thumbnail(
+    app: tauri::AppHandle,
+    input: String,
+    at_ms: i64,
+) -> Result<String, String> {
+    use tauri::Manager;
+
+    if !std::path::Path::new(&input).is_file() {
+        return Err(format!("not a readable file: {input}"));
+    }
+
+    let dir = crate::jobs::cache_dir(&app)?.join("thumbs");
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+
+    let at_ms = at_ms.max(0);
+    let out = dir.join(format!("{}-{at_ms}.jpg", crate::jobs::fingerprint(&input)));
+    let already_rendered = out.is_file() && std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0) > 0;
+
+    if !already_rendered {
+        let seconds = format!("{:.3}", at_ms as f64 / 1000.0);
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-ss",
+                &seconds,
+                "-i",
+                &input,
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:-2",
+                "-q:v",
+                "4",
+            ])
+            .arg(&out)
+            .status()
+            .map_err(|err| format!("ffmpeg could not be started: {err}"))?;
+
+        if !status.success() {
+            // Never leave a zero-byte file behind pretending to be a thumbnail.
+            let _ = std::fs::remove_file(&out);
+            return Err("could not render a thumbnail for that moment".into());
+        }
+    }
+
+    app.asset_protocol_scope()
+        .allow_file(&out)
+        .map_err(|err| err.to_string())?;
+
+    Ok(out.to_string_lossy().to_string())
+}

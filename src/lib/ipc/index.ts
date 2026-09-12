@@ -85,6 +85,14 @@ export const ipc = {
     return invoke("cancel_job", { jobId });
   },
 
+  /**
+   * Renders one frame to a cached JPEG and returns its path. The path is keyed
+   * by the source file and the timestamp, so asking twice costs nothing.
+   */
+  extractThumbnail(input: string, atMs: number): Promise<string> {
+    return invoke("extract_thumbnail", { input, atMs });
+  },
+
   pickVideoFile(): Promise<string | null> {
     return open({
       multiple: false,

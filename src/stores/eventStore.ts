@@ -1,16 +1,15 @@
 import { create } from "zustand";
 import type { EventRow } from "@/lib/db/queries/events";
 import * as eventsQuery from "@/lib/db/queries/events";
-import { clipRange } from "@/lib/time/timecode";
 
 /**
- * Everything a capture needs, already resolved by the caller.
+ * A ready-to-store event.
  *
- * The display fields are passed in rather than re-queried so that a capture
- * costs exactly one round trip: the keypress has to become a visible event
- * well inside the 100 ms budget in NFR-3.
+ * The display fields travel with the draft rather than being re-queried, so a
+ * capture costs exactly one round trip — the keypress has to become a visible
+ * event well inside the 100 ms budget in NFR-3.
  */
-export type CaptureInput = {
+export type EventDraft = {
   matchId: number;
   videoId: number;
   tagId: number;
@@ -21,11 +20,9 @@ export type CaptureInput = {
   teamName: string | null;
   playerId: number | null;
   playerName: string | null;
-  /** Where the playhead was when the key was pressed. */
   anchorMs: number;
-  preRollMs: number;
-  postRollMs: number;
-  durationMs: number;
+  startMs: number;
+  endMs: number;
 };
 
 type EventState = {
@@ -36,16 +33,31 @@ type EventState = {
   undoStack: number[];
   error: string | null;
 
+  /** Narrowing applied to both the timeline and the event list (FR-13). */
+  filters: EventFilters;
+
   load: (matchId: number) => Promise<void>;
   clear: () => void;
-  capture: (input: CaptureInput) => Promise<void>;
+  insert: (draft: EventDraft) => Promise<void>;
   undoLast: () => Promise<void>;
   adjustEnd: (eventId: number, deltaMs: number) => Promise<void>;
   updateNotes: (eventId: number, notes: string) => Promise<void>;
   remove: (eventId: number) => Promise<void>;
+  setFilters: (patch: Partial<EventFilters>) => void;
+  toggleTagFilter: (tagId: number) => void;
+  clearFilters: () => void;
   reportError: (message: string) => void;
   clearError: () => void;
 };
+
+export type EventFilters = {
+  /** Empty means every tag. */
+  tagIds: number[];
+  teamId: number | null;
+  playerId: number | null;
+};
+
+export const NO_FILTERS: EventFilters = { tagIds: [], teamId: null, playerId: null };
 
 const MAX_UNDO = 50;
 
@@ -66,11 +78,28 @@ export function insertInOrder(events: EventRow[], row: EventRow): EventRow[] {
   return next;
 }
 
+/** The events a filter lets through; an empty tag list means every tag. */
+export function applyFilters(events: EventRow[], filters: EventFilters): EventRow[] {
+  if (!isFilterActive(filters)) return events;
+
+  return events.filter((event) => {
+    if (filters.tagIds.length > 0 && !filters.tagIds.includes(event.tagId)) return false;
+    if (filters.teamId !== null && event.teamId !== filters.teamId) return false;
+    if (filters.playerId !== null && event.playerId !== filters.playerId) return false;
+    return true;
+  });
+}
+
+export function isFilterActive(filters: EventFilters): boolean {
+  return filters.tagIds.length > 0 || filters.teamId !== null || filters.playerId !== null;
+}
+
 export const useEventStore = create<EventState>((set, get) => ({
   events: [],
   lastCapturedId: null,
   undoStack: [],
   error: null,
+  filters: NO_FILTERS,
 
   async load(matchId) {
     try {
@@ -81,44 +110,31 @@ export const useEventStore = create<EventState>((set, get) => ({
   },
 
   clear() {
-    set({ events: [], lastCapturedId: null, undoStack: [], error: null });
+    set({ events: [], lastCapturedId: null, undoStack: [], error: null, filters: NO_FILTERS });
   },
 
   /**
-   * One keystroke, one event (FR-5). The insert is awaited before the event is
-   * shown, which is both simpler than an optimistic row and still far inside the
-   * latency budget — and it means a visible event is always a stored event.
+   * Stores one event and shows it. The single write path: the keyboard and the
+   * timeline's range selection both end up here.
+   *
+   * The insert is awaited before the event is shown, which is simpler than an
+   * optimistic row and still far inside the latency budget — and it means a
+   * visible event is always a stored event.
    */
-  async capture(input) {
-    const range = clipRange(input.anchorMs, input.preRollMs, input.postRollMs, input.durationMs);
-
+  async insert(draft) {
     try {
       const id = await eventsQuery.createEvent({
-        matchId: input.matchId,
-        videoId: input.videoId,
-        tagId: input.tagId,
-        teamId: input.teamId,
-        playerId: input.playerId,
-        anchorMs: input.anchorMs,
-        startMs: range.startMs,
-        endMs: range.endMs,
+        matchId: draft.matchId,
+        videoId: draft.videoId,
+        tagId: draft.tagId,
+        teamId: draft.teamId,
+        playerId: draft.playerId,
+        anchorMs: draft.anchorMs,
+        startMs: draft.startMs,
+        endMs: draft.endMs,
       });
 
-      const row: EventRow = {
-        id,
-        anchorMs: Math.round(input.anchorMs),
-        startMs: range.startMs,
-        endMs: range.endMs,
-        notes: null,
-        tagId: input.tagId,
-        tagName: input.tagName,
-        tagColor: input.tagColor,
-        categoryName: input.categoryName,
-        teamId: input.teamId,
-        teamName: input.teamName,
-        playerId: input.playerId,
-        playerName: input.playerName,
-      };
+      const row: EventRow = { id, notes: null, ...draft };
 
       set((state) => ({
         events: insertInOrder(state.events, row),
@@ -208,6 +224,25 @@ export const useEventStore = create<EventState>((set, get) => ({
         events: row ? insertInOrder(state.events, row) : state.events,
       }));
     }
+  },
+
+  setFilters(patch) {
+    set((state) => ({ filters: { ...state.filters, ...patch } }));
+  },
+
+  toggleTagFilter(tagId) {
+    set((state) => ({
+      filters: {
+        ...state.filters,
+        tagIds: state.filters.tagIds.includes(tagId)
+          ? state.filters.tagIds.filter((id) => id !== tagId)
+          : [...state.filters.tagIds, tagId],
+      },
+    }));
+  },
+
+  clearFilters() {
+    set({ filters: NO_FILTERS });
   },
 
   reportError(message) {

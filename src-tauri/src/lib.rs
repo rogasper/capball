@@ -1,7 +1,9 @@
 mod commands;
 mod jobs;
 
-use commands::{check_media_tools, file_status, probe_media, register_asset_path};
+use commands::{
+    check_media_tools, extract_thumbnail, file_status, probe_media, register_asset_path,
+};
 use jobs::{cancel_job, start_media_job, JobRegistry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,6 +19,7 @@ pub fn run() {
             file_status,
             probe_media,
             start_media_job,
+            extract_thumbnail,
             cancel_job
         ])
         .run(tauri::generate_context!())

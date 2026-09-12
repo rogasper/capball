@@ -9,9 +9,10 @@ import { TransportBar } from "@/features/player/TransportBar";
 import { useTransportKeys } from "@/features/player/useTransportKeys";
 import { MediaToolsNotice } from "@/features/settings/MediaToolsNotice";
 import { ActiveContext } from "@/features/tagging/ActiveContext";
-import { CaptureRail } from "@/features/tagging/CaptureRail";
+import { CaptureStatus } from "@/features/tagging/CaptureStatus";
 import { useCaptureKeys } from "@/features/tagging/useCaptureKeys";
 import { TaxonomyPanel } from "@/features/taxonomy/TaxonomyPanel";
+import { Timeline } from "@/features/timeline/Timeline";
 import { initializeDatabase } from "@/lib/db";
 import { ipc } from "@/lib/ipc";
 import { useEventStore } from "@/stores/eventStore";
@@ -105,7 +106,8 @@ export function AppShell() {
         <main className="flex min-h-0 flex-1 flex-col">
           <PlayerStage />
           <ActiveContext />
-          <CaptureRail />
+          <Timeline />
+          <CaptureStatus />
           <TransportBar />
         </main>
 

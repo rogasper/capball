@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventRow } from "@/lib/db/queries/events";
 import * as eventsQuery from "@/lib/db/queries/events";
-import { type CaptureInput, insertInOrder, useEventStore } from "@/stores/eventStore";
+import {
+  applyFilters,
+  type EventDraft,
+  insertInOrder,
+  isFilterActive,
+  NO_FILTERS,
+  useEventStore,
+} from "@/stores/eventStore";
 
 // The query module is the only thing this store touches, so mocking it keeps the
 // capture rules testable without a database.
@@ -36,7 +43,7 @@ function row(id: number, startMs: number, tagName = "High Press"): EventRow {
   };
 }
 
-function captureInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
+function draft(overrides: Partial<EventDraft> = {}): EventDraft {
   return {
     matchId: 1,
     videoId: 1,
@@ -49,16 +56,21 @@ function captureInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
     playerId: 21,
     playerName: "Saka",
     anchorMs: 100_000,
-    preRollMs: 8_000,
-    postRollMs: 12_000,
-    durationMs: 600_000,
+    startMs: 92_000,
+    endMs: 112_000,
     ...overrides,
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useEventStore.setState({ events: [], lastCapturedId: null, undoStack: [], error: null });
+  useEventStore.setState({
+    events: [],
+    lastCapturedId: null,
+    undoStack: [],
+    error: null,
+    filters: { tagIds: [], teamId: null, playerId: null },
+  });
 });
 
 describe("insertInOrder", () => {
@@ -76,56 +88,34 @@ describe("insertInOrder", () => {
   });
 });
 
-describe("capture", () => {
-  it("stores the pre-roll and post-roll range around the moment", async () => {
+describe("insert", () => {
+  it("stores the draft's own range, so a timeline selection is kept exactly", async () => {
     createEvent.mockResolvedValue(11);
 
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore
+      .getState()
+      .insert(draft({ anchorMs: 401_340, startMs: 320_000, endMs: 420_000 }));
 
     expect(createEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ startMs: 92_000, endMs: 112_000 }),
-    );
-  });
-
-  it("clamps the range to the video bounds", async () => {
-    createEvent.mockResolvedValue(12);
-
-    await useEventStore.getState().capture(captureInput({ anchorMs: 2_000, durationMs: 5_000 }));
-
-    expect(createEvent).toHaveBeenCalledWith(expect.objectContaining({ startMs: 0, endMs: 5_000 }));
-  });
-
-  it("stamps the active team and player onto the event", async () => {
-    createEvent.mockResolvedValue(13);
-
-    await useEventStore.getState().capture(captureInput());
-
-    expect(createEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        teamId: 7,
-        playerId: 21,
-        matchId: 1,
-        videoId: 1,
-        tagId: 1,
-      }),
-    );
-  });
-
-  it("stores the tagged moment as well as the range around it", async () => {
-    createEvent.mockResolvedValue(15);
-
-    await useEventStore.getState().capture(captureInput({ anchorMs: 401_340 }));
-
-    expect(createEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ anchorMs: 401_340, startMs: 393_340, endMs: 413_340 }),
+      expect.objectContaining({ anchorMs: 401_340, startMs: 320_000, endMs: 420_000 }),
     );
     expect(useEventStore.getState().events[0]?.anchorMs).toBe(401_340);
+  });
+
+  it("carries the team and player context onto the event", async () => {
+    createEvent.mockResolvedValue(13);
+
+    await useEventStore.getState().insert(draft());
+
+    expect(createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: 7, playerId: 21, matchId: 1, videoId: 1, tagId: 1 }),
+    );
   });
 
   it("shows the event immediately and remembers it for undo", async () => {
     createEvent.mockResolvedValue(14);
 
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore.getState().insert(draft());
 
     const state = useEventStore.getState();
     expect(state.events.map((event) => event.id)).toEqual([14]);
@@ -137,7 +127,7 @@ describe("capture", () => {
   it("reports a failure instead of pretending the moment was captured", async () => {
     createEvent.mockRejectedValue(new Error("disk is full"));
 
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore.getState().insert(draft());
 
     const state = useEventStore.getState();
     expect(state.events).toEqual([]);
@@ -150,7 +140,7 @@ describe("undoLast", () => {
   it("removes the most recent capture and its stored row", async () => {
     createEvent.mockResolvedValue(21);
     deleteEvent.mockResolvedValue(undefined);
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore.getState().insert(draft());
 
     await useEventStore.getState().undoLast();
 
@@ -167,7 +157,7 @@ describe("undoLast", () => {
   it("puts the event back when the delete fails", async () => {
     createEvent.mockResolvedValue(22);
     deleteEvent.mockRejectedValue(new Error("locked"));
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore.getState().insert(draft());
 
     await useEventStore.getState().undoLast();
 
@@ -180,7 +170,7 @@ describe("adjustEnd", () => {
   it("extends the end of the last event", async () => {
     createEvent.mockResolvedValue(31);
     updateEventRange.mockResolvedValue(undefined);
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore.getState().insert(draft());
 
     await useEventStore.getState().adjustEnd(31, 1_000);
 
@@ -191,10 +181,59 @@ describe("adjustEnd", () => {
   it("never lets the end fall before the start", async () => {
     createEvent.mockResolvedValue(32);
     updateEventRange.mockResolvedValue(undefined);
-    await useEventStore.getState().capture(captureInput());
+    await useEventStore.getState().insert(draft());
 
     await useEventStore.getState().adjustEnd(32, -999_000);
 
     expect(useEventStore.getState().events[0]?.endMs).toBe(92_000);
+  });
+});
+
+describe("filters", () => {
+  const list: EventRow[] = [
+    { ...row(1, 100), tagId: 1, teamId: 7, playerId: 21 },
+    { ...row(2, 200), tagId: 2, teamId: 8, playerId: 22 },
+    { ...row(3, 300), tagId: 1, teamId: null, playerId: null },
+  ];
+
+  it("lets everything through when nothing is set", () => {
+    expect(applyFilters(list, NO_FILTERS)).toHaveLength(3);
+    expect(isFilterActive(NO_FILTERS)).toBe(false);
+  });
+
+  it("narrows to the chosen tags", () => {
+    const filtered = applyFilters(list, { ...NO_FILTERS, tagIds: [1] });
+    expect(filtered.map((event) => event.id)).toEqual([1, 3]);
+  });
+
+  it("accepts several tags at once", () => {
+    const filtered = applyFilters(list, { ...NO_FILTERS, tagIds: [1, 2] });
+    expect(filtered).toHaveLength(3);
+  });
+
+  it("narrows by team, ignoring events with no team", () => {
+    const filtered = applyFilters(list, { ...NO_FILTERS, teamId: 7 });
+    expect(filtered.map((event) => event.id)).toEqual([1]);
+  });
+
+  it("narrows by player", () => {
+    const filtered = applyFilters(list, { ...NO_FILTERS, playerId: 22 });
+    expect(filtered.map((event) => event.id)).toEqual([2]);
+  });
+
+  it("combines the criteria", () => {
+    const filtered = applyFilters(list, { tagIds: [1], teamId: 7, playerId: 21 });
+    expect(filtered.map((event) => event.id)).toEqual([1]);
+    expect(isFilterActive({ tagIds: [1], teamId: 7, playerId: 21 })).toBe(true);
+  });
+
+  it("returns the same array when nothing is filtered, so memoised lists stay stable", () => {
+    expect(applyFilters(list, NO_FILTERS)).toBe(list);
+  });
+
+  it("clears back to everything", () => {
+    useEventStore.setState({ filters: { tagIds: [2], teamId: 8, playerId: 22 } });
+    useEventStore.getState().clearFilters();
+    expect(useEventStore.getState().filters).toEqual(NO_FILTERS);
   });
 });
