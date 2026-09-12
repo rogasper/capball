@@ -5,6 +5,8 @@ import { events, players, tagCategories, tags, teams } from "@/lib/db/schema";
 /** An event as the UI shows it: ids plus the names behind them. */
 export type EventRow = {
   id: number;
+  /** Which video of the match this event belongs to (a match may hold several). */
+  videoId: number;
   /** The moment the user tagged; the clip range hangs around it. */
   anchorMs: number;
   startMs: number;
@@ -44,6 +46,7 @@ export async function listEvents(matchId: number): Promise<EventRow[]> {
   return db
     .select({
       id: sql<number>`${events.id}`.as("event_id"),
+      videoId: sql<number>`${events.videoId}`.as("video_id"),
       anchorMs: sql<number>`${events.anchorMs}`.as("anchor_ms"),
       startMs: sql<number>`${events.startMs}`.as("start_ms"),
       endMs: sql<number>`${events.endMs}`.as("end_ms"),

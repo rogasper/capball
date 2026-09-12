@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ReviewBar } from "@/features/review/ReviewBar";
 import type { EventRow } from "@/lib/db/queries/events";
 import { ON_DEMAND, useThumbnail } from "@/lib/media/thumbnails";
 import { playback } from "@/lib/playback";
@@ -178,6 +179,8 @@ export function EventList() {
           {filtered ? `${visible.length} of ${events.length}` : `${events.length} in order`}
         </span>
       </div>
+
+      <ReviewBar events={visible} />
 
       {filtered && (
         <div className="flex items-center gap-2 text-label text-muted-foreground">

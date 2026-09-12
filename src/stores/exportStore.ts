@@ -1,36 +1,31 @@
 import { create } from "zustand";
 import type { EventRow } from "@/lib/db/queries/events";
 import {
-  DEFAULT_TEMPLATE,
   describeConflicts,
   type NamingContext,
   planNames,
   renderFilename,
 } from "@/lib/export/filename";
-import { type ExportMode, ipc } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import { awaitJob } from "@/lib/jobs/jobEvents";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
- * Clip export (FR-9).
+ * Running a clip export (FR-9).
  *
  * The queue lives here rather than in Rust because the sequencing is product
- * behaviour — order, padding, one job at a time, what to do on conflict — while
+ * behaviour — order, padding, one job at a time, what to do on a conflict — while
  * Rust owns only the single FFmpeg run and its progress. The naming plan is
  * computed before anything is started, so a collision is reported instead of
  * discovered halfway through a batch.
+ *
+ * Preferences are not stored here: destination, pattern, cut mode and padding all
+ * live in the settings store, which is what persists them across restarts.
  */
 
 type ExportPhase = "idle" | "running" | "done" | "error";
 
 type ExportState = {
-  destination: string | null;
-  template: string;
-  mode: ExportMode;
-  /** Padding added on top of each event's own range, per export (FR-9.3). */
-  extraBeforeMs: number;
-  extraAfterMs: number;
-  concatenate: boolean;
-
   phase: ExportPhase;
   totalSteps: number;
   completedSteps: number;
@@ -42,9 +37,6 @@ type ExportState = {
   error: string | null;
   activeJobId: string | null;
 
-  setOptions: (patch: Partial<ExportOptions>) => void;
-  initialize: () => Promise<void>;
-  chooseDestination: () => Promise<void>;
   run: (input: {
     events: EventRow[];
     context: NamingContext;
@@ -54,11 +46,6 @@ type ExportState = {
   cancel: () => Promise<void>;
   reset: () => void;
 };
-
-type ExportOptions = Pick<
-  ExportState,
-  "destination" | "template" | "mode" | "extraBeforeMs" | "extraAfterMs" | "concatenate"
->;
 
 const IDLE = {
   phase: "idle" as ExportPhase,
@@ -95,35 +82,17 @@ export function paddedRange(
 }
 
 export const useExportStore = create<ExportState>((set, get) => ({
-  destination: null,
-  template: DEFAULT_TEMPLATE,
-  mode: "fast",
-  extraBeforeMs: 0,
-  extraAfterMs: 0,
-  concatenate: false,
   ...IDLE,
 
-  setOptions(patch) {
-    set(patch);
-  },
-
-  /** Fills in the default destination once, so exporting needs no dialog. */
-  async initialize() {
-    if (get().destination !== null) return;
-    try {
-      set({ destination: await ipc.defaultExportDir() });
-    } catch (error) {
-      set({ error: messageOf(error) });
-    }
-  },
-
-  async chooseDestination() {
-    const folder = await ipc.pickFolder();
-    if (folder) set({ destination: folder });
-  },
-
   async run({ events, context, durationMs, sourcePath }) {
-    const { destination, template, mode, extraBeforeMs, extraAfterMs, concatenate } = get();
+    const {
+      exportDestination: destination,
+      exportTemplate: template,
+      exportMode: mode,
+      exportExtraBeforeMs: extraBeforeMs,
+      exportExtraAfterMs: extraAfterMs,
+      exportConcatenate: concatenate,
+    } = useSettingsStore.getState();
 
     if (!sourcePath) {
       set({ ...IDLE, phase: "error", error: "Import a video before exporting." });
@@ -210,7 +179,6 @@ export const useExportStore = create<ExportState>((set, get) => ({
               result.state === "cancelled"
                 ? null
                 : (result.message ?? `Could not export ${item.fileName}.`),
-            exported: get().exported,
           });
           return;
         }

@@ -8,7 +8,9 @@ import { MatchPanel } from "@/features/library/MatchPanel";
 import { PlayerStage } from "@/features/player/PlayerStage";
 import { TransportBar } from "@/features/player/TransportBar";
 import { useTransportKeys } from "@/features/player/useTransportKeys";
+import { useReviewRunner } from "@/features/review/useReviewRunner";
 import { MediaToolsNotice } from "@/features/settings/MediaToolsNotice";
+import { SettingsPanel } from "@/features/settings/SettingsPanel";
 import { ActiveContext } from "@/features/tagging/ActiveContext";
 import { CaptureStatus } from "@/features/tagging/CaptureStatus";
 import { useCaptureKeys } from "@/features/tagging/useCaptureKeys";
@@ -39,6 +41,7 @@ export function AppShell() {
 
   useTransportKeys(hasVideo);
   useCaptureKeys(hasVideo);
+  useReviewRunner();
 
   useEffect(() => {
     void ipc
@@ -119,6 +122,7 @@ export function AppShell() {
               <TabsTrigger value="match">Match</TabsTrigger>
               <TabsTrigger value="tags">Tags</TabsTrigger>
               <TabsTrigger value="export">Export</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
             <TabsContent value="events" className="pt-4">
               <EventList />
@@ -131,6 +135,9 @@ export function AppShell() {
             </TabsContent>
             <TabsContent value="export" className="pt-4">
               <ExportPanel />
+            </TabsContent>
+            <TabsContent value="settings" className="pt-4">
+              <SettingsPanel />
             </TabsContent>
           </Tabs>
         </aside>

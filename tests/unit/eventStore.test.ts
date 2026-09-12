@@ -28,6 +28,7 @@ const updateEventRange = vi.mocked(eventsQuery.updateEventRange);
 function row(id: number, startMs: number, tagName = "High Press"): EventRow {
   return {
     id,
+    videoId: 1,
     anchorMs: startMs + 8_000,
     startMs,
     endMs: startMs + 20_000,

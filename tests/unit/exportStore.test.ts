@@ -32,12 +32,27 @@ vi.mock("@/lib/jobs/jobEvents", () => ({
 
 async function loadStore() {
   vi.resetModules();
-  return import("@/stores/exportStore");
+  const settings = await import("@/stores/settingsStore");
+  // Preferences live in the settings store; the export store only runs.
+  settings.useSettingsStore.setState({
+    exportDestination: "/Movies/capball",
+    exportTemplate: "{match}_{tag}_{time}",
+    exportMode: "fast",
+    exportExtraBeforeMs: 0,
+    exportExtraAfterMs: 0,
+    exportConcatenate: false,
+  });
+
+  return {
+    ...(await import("@/stores/exportStore")),
+    useSettingsStore: settings.useSettingsStore,
+  };
 }
 
 function row(id: number, tagName: string, anchorMs: number): EventRow {
   return {
     id,
+    videoId: 1,
     anchorMs,
     startMs: anchorMs - 8_000,
     endMs: anchorMs + 12_000,
@@ -94,7 +109,6 @@ beforeEach(() => {
 describe("export batch", () => {
   it("writes one clip per event, in chronological order, with templated names", async () => {
     const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball", concatenate: false });
 
     await useExportStore.getState().run(runInput);
 
@@ -108,7 +122,6 @@ describe("export batch", () => {
 
   it("cuts the range the event carries, without padding by default", async () => {
     const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball" });
 
     await useExportStore.getState().run(runInput);
 
@@ -116,12 +129,8 @@ describe("export batch", () => {
   });
 
   it("adds padding on request", async () => {
-    const { useExportStore } = await loadStore();
-    useExportStore.setState({
-      destination: "/Movies/capball",
-      extraBeforeMs: 2_000,
-      extraAfterMs: 3_000,
-    });
+    const { useExportStore, useSettingsStore } = await loadStore();
+    useSettingsStore.setState({ exportExtraBeforeMs: 2_000, exportExtraAfterMs: 3_000 });
 
     await useExportStore.getState().run(runInput);
 
@@ -131,7 +140,6 @@ describe("export batch", () => {
   it("refuses before writing anything when a file is already there", async () => {
     fileStatus.mockResolvedValue({ exists: true, sizeBytes: 10 });
     const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball" });
 
     await useExportStore.getState().run(runInput);
 
@@ -141,8 +149,8 @@ describe("export batch", () => {
   });
 
   it("refuses a template that names two events the same way", async () => {
-    const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball", template: "{tag}" });
+    const { useExportStore, useSettingsStore } = await loadStore();
+    useSettingsStore.setState({ exportTemplate: "{tag}" });
 
     // Two events of the same tag: the template cannot tell them apart.
     await useExportStore.getState().run({
@@ -155,8 +163,8 @@ describe("export batch", () => {
   });
 
   it("joins the clips afterwards, in the same order, when asked", async () => {
-    const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball", concatenate: true });
+    const { useExportStore, useSettingsStore } = await loadStore();
+    useSettingsStore.setState({ exportConcatenate: true });
 
     await useExportStore.getState().run(runInput);
 
@@ -181,7 +189,6 @@ describe("export batch", () => {
       message: "ffmpeg said no",
     });
     const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball" });
 
     await useExportStore.getState().run(runInput);
 
@@ -201,7 +208,6 @@ describe("export batch", () => {
       message: null,
     });
     const { useExportStore } = await loadStore();
-    useExportStore.setState({ destination: "/Movies/capball" });
 
     await useExportStore.getState().run(runInput);
 
@@ -211,16 +217,19 @@ describe("export batch", () => {
   });
 
   it("asks for a folder and a video before it starts", async () => {
-    const { useExportStore } = await loadStore();
+    const { useExportStore, useSettingsStore } = await loadStore();
 
     await useExportStore.getState().run({ ...runInput, sourcePath: null });
     expect(useExportStore.getState().error).toMatch(/import a video/i);
 
+    // No destination yet, which is the state before the default is filled in.
     useExportStore.setState({ error: null });
+    useSettingsStore.setState({ exportDestination: null });
     await useExportStore.getState().run({ ...runInput, sourcePath: "/x.mp4" });
     expect(useExportStore.getState().error).toMatch(/folder/i);
 
-    useExportStore.setState({ destination: "/Movies/capball", error: null });
+    useExportStore.setState({ error: null });
+    useSettingsStore.setState({ exportDestination: "/Movies/capball" });
     await useExportStore.getState().run({ ...runInput, events: [], sourcePath: "/x.mp4" });
     expect(useExportStore.getState().error).toMatch(/at least one event/i);
   });

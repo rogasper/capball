@@ -462,3 +462,15 @@ pub fn default_export_dir(app: tauri::AppHandle) -> Result<String, String> {
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     Ok(dir.to_string_lossy().to_string())
 }
+
+/// Reads a text file the user picked. Used by the import paths.
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|err| format!("could not read {path}: {err}"))
+}
+
+/// Writes a text file the user chose. Used by the export paths.
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|err| format!("could not write {path}: {err}"))
+}

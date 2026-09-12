@@ -96,27 +96,51 @@ export function ExportPanel() {
   const activeVideoId = useLibraryStore((state) => state.activeVideoId);
   const tools = useSettingsStore((state) => state.tools);
 
-  const destination = useExportStore((state) => state.destination);
-  const template = useExportStore((state) => state.template);
-  const mode = useExportStore((state) => state.mode);
-  const extraBeforeMs = useExportStore((state) => state.extraBeforeMs);
-  const extraAfterMs = useExportStore((state) => state.extraAfterMs);
-  const concatenate = useExportStore((state) => state.concatenate);
+  const destination = useSettingsStore((state) => state.exportDestination);
+  const template = useSettingsStore((state) => state.exportTemplate);
+  const mode = useSettingsStore((state) => state.exportMode);
+  const extraBeforeMs = useSettingsStore((state) => state.exportExtraBeforeMs);
+  const extraAfterMs = useSettingsStore((state) => state.exportExtraAfterMs);
+  const concatenate = useSettingsStore((state) => state.exportConcatenate);
+  const settingsLoaded = useSettingsStore((state) => state.loaded);
+  const settingsError = useSettingsStore((state) => state.error);
   const phase = useExportStore((state) => state.phase);
   const problems = useExportStore((state) => state.problems);
   const error = useExportStore((state) => state.error);
   const exported = useExportStore((state) => state.exported);
   const concatenated = useExportStore((state) => state.concatenated);
-  const setOptions = useExportStore((state) => state.setOptions);
-  const initialize = useExportStore((state) => state.initialize);
-  const chooseDestination = useExportStore((state) => state.chooseDestination);
+  const setOptions = useSettingsStore((state) => state.setExportOptions);
   const run = useExportStore((state) => state.run);
   const reset = useExportStore((state) => state.reset);
 
-  // Fill in the default destination once, so a first export needs no dialog.
   useEffect(() => {
-    void initialize();
-  }, [initialize]);
+    void useSettingsStore.getState().load();
+  }, []);
+
+  const chooseDestination = async () => {
+    try {
+      const folder = await ipc.pickFolder();
+      if (folder) setOptions({ exportDestination: folder });
+    } catch (error) {
+      useSettingsStore
+        .getState()
+        .reportError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  // Fill in a default destination once, so a first export needs no dialog.
+  useEffect(() => {
+    if (!settingsLoaded || destination !== null) return;
+
+    void ipc
+      .defaultExportDir()
+      .then((dir) => setOptions({ exportDestination: dir }))
+      .catch((error: unknown) =>
+        useSettingsStore
+          .getState()
+          .reportError(error instanceof Error ? error.message : String(error)),
+      );
+  }, [settingsLoaded, destination, setOptions]);
 
   const selected = useMemo(() => applyFilters(events, filters), [events, filters]);
   const filtered = isFilterActive(filters);
@@ -183,7 +207,7 @@ export function ExportPanel() {
         <Input
           id="export-template"
           value={template}
-          onChange={(event) => setOptions({ template: event.currentTarget.value })}
+          onChange={(event) => setOptions({ exportTemplate: event.currentTarget.value })}
           className="font-mono text-label"
         />
         <p className="text-caption text-muted-foreground">
@@ -209,7 +233,7 @@ export function ExportPanel() {
               size="sm"
               aria-pressed={mode === option.value}
               title={option.hint}
-              onClick={() => setOptions({ mode: option.value })}
+              onClick={() => setOptions({ exportMode: option.value })}
             >
               {option.label}
             </Button>
@@ -230,7 +254,9 @@ export function ExportPanel() {
             aria-label="Extra seconds before"
             value={extraBeforeMs / 1000}
             onChange={(event) =>
-              setOptions({ extraBeforeMs: Math.max(0, Number(event.currentTarget.value) * 1000) })
+              setOptions({
+                exportExtraBeforeMs: Math.max(0, Number(event.currentTarget.value) * 1000),
+              })
             }
             className="h-7 w-20 text-label"
           />
@@ -240,7 +266,9 @@ export function ExportPanel() {
             aria-label="Extra seconds after"
             value={extraAfterMs / 1000}
             onChange={(event) =>
-              setOptions({ extraAfterMs: Math.max(0, Number(event.currentTarget.value) * 1000) })
+              setOptions({
+                exportExtraAfterMs: Math.max(0, Number(event.currentTarget.value) * 1000),
+              })
             }
             className="h-7 w-20 text-label"
           />
@@ -252,7 +280,7 @@ export function ExportPanel() {
         <input
           type="checkbox"
           checked={concatenate}
-          onChange={(event) => setOptions({ concatenate: event.currentTarget.checked })}
+          onChange={(event) => setOptions({ exportConcatenate: event.currentTarget.checked })}
           className="size-3.5 accent-[var(--primary)]"
         />
         Also join them into one file, in order
@@ -269,6 +297,15 @@ export function ExportPanel() {
             Change the file name pattern or pick another folder — nothing is ever overwritten.
           </li>
         </ul>
+      )}
+
+      {settingsError && (
+        <p
+          role="alert"
+          className="rounded-lg border border-warning/40 bg-warning/10 p-2 text-label"
+        >
+          Settings could not be saved: {settingsError}
+        </p>
       )}
 
       {error && !problems.length && (

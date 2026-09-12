@@ -25,6 +25,7 @@ vi.mock("@/lib/playback", () => ({
  */
 const event: EventRow = {
   id: 20,
+  videoId: 1,
   anchorMs: 85_701,
   startMs: 77_701,
   endMs: 97_701,

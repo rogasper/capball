@@ -3,7 +3,7 @@ mod jobs;
 
 use commands::{
     check_media_tools, default_export_dir, extract_thumbnail, file_status, probe_media,
-    register_asset_path,
+    read_text_file, register_asset_path, write_text_file,
 };
 use jobs::{cancel_job, start_concat, start_export, start_media_job, JobRegistry};
 
@@ -24,6 +24,8 @@ pub fn run() {
             start_concat,
             extract_thumbnail,
             default_export_dir,
+            read_text_file,
+            write_text_file,
             cancel_job
         ])
         .run(tauri::generate_context!())

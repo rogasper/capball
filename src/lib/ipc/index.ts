@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /**
@@ -116,6 +116,33 @@ export const ipc = {
   /** Where clips go unless the user chooses elsewhere. Created on demand. */
   defaultExportDir(): Promise<string> {
     return invoke("default_export_dir");
+  },
+
+  /** Reads a text file the user picked, for the import paths. */
+  readTextFile(path: string): Promise<string> {
+    return invoke("read_text_file", { path });
+  },
+
+  /** Writes a text file the user chose, for the export paths. */
+  writeTextFile(path: string, contents: string): Promise<void> {
+    return invoke("write_text_file", { path, contents });
+  },
+
+  pickJsonFile(): Promise<string | null> {
+    return open({
+      multiple: false,
+      directory: false,
+      title: "Choose a capball file",
+      filters: [{ name: "capball data", extensions: ["json"] }],
+    }) as Promise<string | null>;
+  },
+
+  saveJsonFile(defaultName: string): Promise<string | null> {
+    return save({
+      defaultPath: defaultName,
+      title: "Save capball data",
+      filters: [{ name: "capball data", extensions: ["json"] }],
+    });
   },
 
   pickFolder(): Promise<string | null> {

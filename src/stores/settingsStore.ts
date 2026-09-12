@@ -1,23 +1,106 @@
 import { create } from "zustand";
+import * as settingsQuery from "@/lib/db/queries/settings";
 import type { ToolStatus } from "@/lib/ipc";
+import {
+  DEFAULT_SETTINGS,
+  decodeSettings,
+  encodeSettings,
+  type SettingsValues,
+} from "@/lib/settings/values";
 
-const DEFAULT_PRE_ROLL_MS = 8_000;
-const DEFAULT_POST_ROLL_MS = 12_000;
+/**
+ * The single owner of user preferences (FR-11).
+ *
+ * Everything here is persisted, so a default survives a restart; the export
+ * panel and the capture engine both read from this rather than keeping their own
+ * copies of the same numbers.
+ */
 
-type SettingsState = {
-  preRollMs: number;
-  postRollMs: number;
+type ExportOptions = Pick<
+  SettingsValues,
+  | "exportDestination"
+  | "exportTemplate"
+  | "exportMode"
+  | "exportExtraBeforeMs"
+  | "exportExtraAfterMs"
+  | "exportConcatenate"
+>;
+
+type SettingsState = SettingsValues & {
   tools: ToolStatus | null;
+  loaded: boolean;
+  error: string | null;
+
+  load: () => Promise<void>;
   setPreRollMs: (ms: number) => void;
   setPostRollMs: (ms: number) => void;
+  setExportOptions: (patch: Partial<ExportOptions>) => void;
+  reset: () => void;
   setTools: (tools: ToolStatus) => void;
+  reportError: (message: string) => void;
+  clearError: () => void;
 };
 
-export const useSettingsStore = create<SettingsState>((set) => ({
-  preRollMs: DEFAULT_PRE_ROLL_MS,
-  postRollMs: DEFAULT_POST_ROLL_MS,
-  tools: null,
-  setPreRollMs: (preRollMs) => set({ preRollMs: Math.max(0, Math.round(preRollMs)) }),
-  setPostRollMs: (postRollMs) => set({ postRollMs: Math.max(0, Math.round(postRollMs)) }),
-  setTools: (tools) => set({ tools }),
-}));
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+export const useSettingsStore = create<SettingsState>((set) => {
+  /** Applies a change and writes it; a failed write is visible, never swallowed. */
+  const persist = (patch: Partial<SettingsValues>) => {
+    set(patch);
+    void settingsQuery
+      .writeSettings(encodeSettings(patch))
+      .catch((error) => set({ error: messageOf(error) }));
+  };
+
+  return {
+    ...DEFAULT_SETTINGS,
+    tools: null,
+    loaded: false,
+    error: null,
+
+    async load() {
+      try {
+        const rows = await settingsQuery.readSettings();
+        set({ ...decodeSettings(rows), loaded: true });
+      } catch (error) {
+        // Defaults are still usable, so say what happened and carry on.
+        set({ ...DEFAULT_SETTINGS, loaded: true, error: messageOf(error) });
+      }
+    },
+
+    setPreRollMs(ms) {
+      persist({ preRollMs: Math.max(0, Math.round(ms)) });
+    },
+
+    setPostRollMs(ms) {
+      persist({ postRollMs: Math.max(0, Math.round(ms)) });
+    },
+
+    setExportOptions(patch) {
+      const next: Partial<SettingsValues> = { ...patch };
+      if (patch.exportExtraBeforeMs !== undefined) {
+        next.exportExtraBeforeMs = Math.max(0, Math.round(patch.exportExtraBeforeMs));
+      }
+      if (patch.exportExtraAfterMs !== undefined) {
+        next.exportExtraAfterMs = Math.max(0, Math.round(patch.exportExtraAfterMs));
+      }
+      persist(next);
+    },
+
+    reset() {
+      persist(DEFAULT_SETTINGS);
+    },
+
+    setTools(tools) {
+      set({ tools });
+    },
+
+    reportError(message) {
+      set({ error: message });
+    },
+
+    clearError() {
+      set({ error: null });
+    },
+  };
+});
