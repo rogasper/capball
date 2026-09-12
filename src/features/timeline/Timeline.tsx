@@ -203,9 +203,20 @@ export function Timeline() {
   );
   const moved = useRef(false);
 
-  const localX = (event: React.PointerEvent) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return event.clientX - bounds.left;
+  /**
+   * Pointer x inside the lane.
+   *
+   * Measured against the lane element, not against `event.currentTarget`. Two
+   * reasons, and the second one cost a blank window: this is the same frame the
+   * time↔pixel maths uses (`widthPx` comes from this element), and the element is
+   * still there when a state updater runs — the event's `currentTarget` is
+   * cleared once dispatch finishes, so reading it from inside a `setState`
+   * callback throws once React gets round to calling it.
+   */
+  const localX = (clientX: number): number => {
+    const lane = laneRef.current;
+    if (!lane) return 0;
+    return clientX - lane.getBoundingClientRect().left;
   };
 
   const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -221,7 +232,7 @@ export function Timeline() {
     drag.current = { mode: "select", originX: event.clientX, originView: view };
     moved.current = false;
 
-    const timeMs = xToTime(localX(event), view);
+    const timeMs = xToTime(localX(event.clientX), view);
     setSelection({ startMs: timeMs, endMs: timeMs });
   };
 
@@ -237,9 +248,10 @@ export function Timeline() {
       return;
     }
 
-    setSelection((current) =>
-      current ? { ...current, endMs: xToTime(localX(event), state.originView) } : current,
-    );
+    // Read the geometry now, while the event is still dispatching: a state
+    // updater runs during the next render, and by then the event is spent.
+    const endMs = xToTime(localX(event.clientX), state.originView);
+    setSelection((current) => (current ? { ...current, endMs } : current));
   };
 
   const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -249,7 +261,7 @@ export function Timeline() {
 
     // A press that never moved is a seek, not a drag.
     if (!moved.current) {
-      const timeMs = xToTime(localX(event), state.originView);
+      const timeMs = xToTime(localX(event.clientX), state.originView);
       playback.seekMs(timeMs);
       if (state.mode === "select") setSelection(null);
     }
@@ -302,9 +314,10 @@ export function Timeline() {
         className="relative select-none touch-none"
         title="Drag to select a range, click to seek, scroll to pan, ⌘/Ctrl-scroll to zoom"
       >
-        {/* Ruler: drag to pan, click to seek. */}
+        {/* Ruler: drag to pan, click to seek. Clipped so a label can never
+            escape the lane, whatever the tick layout decides. */}
         <div
-          className={cn("relative h-5 cursor-grab border-b", laneTone)}
+          className={cn("relative h-5 cursor-grab overflow-hidden border-b", laneTone)}
           onPointerDown={beginPan}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
@@ -321,9 +334,13 @@ export function Timeline() {
               className="absolute top-0 bottom-0 border-l border-border/70"
               style={{ left: `${tick.x}px` }}
             >
-              <span className="absolute top-0.5 left-1 font-mono text-caption tabular-nums text-muted-foreground">
-                {formatTimecode(tick.timeMs)}
-              </span>
+              {/* The last tick keeps its rhythm but drops its label rather
+                  than letting the text run past the lane. */}
+              {tick.showLabel && (
+                <span className="absolute top-0.5 left-1 font-mono text-caption tabular-nums text-muted-foreground">
+                  {formatTimecode(tick.timeMs)}
+                </span>
+              )}
             </span>
           ))}
         </div>

@@ -149,23 +149,75 @@ export function layoutMarkers(
   return rendered;
 }
 
-/** Ruler ticks, kept to a readable count whatever the zoom. */
-export function layoutTicks(view: Viewport, targetCount = 8): { x: number; timeMs: number }[] {
+/** JetBrains Mono at the caption size advances about this much per character. */
+const LABEL_CHAR_PX = 6.6;
+/** The inset a label sits at from its tick. */
+const LABEL_INSET_PX = 4;
+
+/** Clear air between two labels, so a ruler never reads as a smear. */
+export const TICK_LABEL_GAP_PX = 20;
+
+/**
+ * How much room a tick label needs for this video.
+ *
+ * Labels are `MM:SS.mmm`, or `H:MM:SS.mmm` once a match passes an hour, and the
+ * difference decides whether a ruler can carry eight labels or only five. Asking
+ * for the worst case everywhere would leave a 14-minute match with three ticks.
+ */
+export function tickLabelPx(durationMs: number): number {
+  const characters = durationMs >= 3_600_000 ? 11 : 9;
+  return Math.ceil(characters * LABEL_CHAR_PX) + LABEL_INSET_PX;
+}
+
+export type Tick = {
+  x: number;
+  timeMs: number;
+  /**
+   * False for the last tick when its label would run past the lane.
+   *
+   * The label is dropped rather than moved to the other side of its tick: moving
+   * it lands it on top of its neighbour, which is worse than an unlabelled tick.
+   * The line is still drawn, so the ruler keeps its rhythm.
+   */
+  showLabel: boolean;
+};
+
+/**
+ * Ruler ticks, kept to a readable count whatever the zoom.
+ *
+ * The step is chosen so the *labels* have room, not merely the ticks: at a step
+ * that only fits the ticks, consecutive timecodes end up nearly touching, which
+ * is what makes a ruler look broken. A sparser ruler with clear labels reads far
+ * better than a dense one that is illegible.
+ */
+export function layoutTicks(view: Viewport, targetCount = 8): Tick[] {
   const span = visibleSpanMs(view);
   const rough = span / Math.max(1, targetCount);
 
+  // Human-sized steps, with the three- and four-minute rungs included so the
+  // jump from two minutes to five is not a cliff in label count.
   const steps = [
-    100, 250, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000,
-    900_000, 1_800_000, 3_600_000,
+    100, 250, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 180_000, 240_000,
+    300_000, 600_000, 900_000, 1_800_000, 3_600_000,
   ];
-  const step = steps.find((candidate) => candidate >= rough) ?? steps[steps.length - 1];
+
+  const labelPx = tickLabelPx(view.durationMs);
+  const roomForLabel = labelPx + TICK_LABEL_GAP_PX;
+  const bigEnough = steps.filter((candidate) => candidate >= rough);
+  // Prefer a step whose ticks are far enough apart for their labels; when even
+  // the coarsest step is too tight, take it and let the fit check do its work.
+  const step =
+    bigEnough.find((candidate) => candidate * view.pxPerMs >= roomForLabel) ??
+    bigEnough[0] ??
+    steps[steps.length - 1];
   if (step === undefined) return [];
 
   const first = Math.ceil(view.viewStartMs / step) * step;
-  const ticks: { x: number; timeMs: number }[] = [];
+  const ticks: Tick[] = [];
 
   for (let timeMs = first; timeMs <= viewEndMs(view); timeMs += step) {
-    ticks.push({ x: timeToX(timeMs, view), timeMs });
+    const x = timeToX(timeMs, view);
+    ticks.push({ x, timeMs, showLabel: x + labelPx <= view.widthPx });
   }
 
   return ticks;

@@ -7,6 +7,8 @@ import {
   layoutTicks,
   MAX_PX_PER_MS,
   panBy,
+  TICK_LABEL_GAP_PX,
+  tickLabelPx,
   timeToX,
   type Viewport,
   viewEndMs,
@@ -168,6 +170,47 @@ describe("layoutTicks", () => {
       expect(ticks.length).toBeGreaterThan(0);
       expect(ticks.length).toBeLessThanOrEqual(20);
     }
+  });
+
+  it("asks for a wider label only once a match passes an hour", () => {
+    expect(tickLabelPx(861_737)).toBeLessThan(tickLabelPx(4_000_000));
+    expect(tickLabelPx(3_600_000)).toBe(tickLabelPx(4_000_000));
+  });
+
+  it("spaces ticks far enough apart that labels cannot collide", () => {
+    // The cramped ruler is the failure this guards: labels that nearly touch
+    // read as one smear, so the step has to fit the label, not just the tick.
+    for (const pxPerMs of [0.0005, 0.002, 0.01, 0.05]) {
+      const v = view({ pxPerMs, viewStartMs: 30_000 });
+      const labelled = layoutTicks(v).filter((tick) => tick.showLabel);
+      for (let index = 1; index < labelled.length; index++) {
+        const gap = labelled[index].x - labelled[index - 1].x;
+        // Neighbouring labels must not come within touching distance.
+        expect(gap).toBeGreaterThanOrEqual(tickLabelPx(v.durationMs) + TICK_LABEL_GAP_PX);
+      }
+    }
+  });
+
+  it("draws a label only when it fits inside the lane", () => {
+    for (const pxPerMs of [0.0005, 0.002, 0.01, 0.05]) {
+      const v = view({ pxPerMs, viewStartMs: 30_000 });
+      for (const tick of layoutTicks(v)) {
+        if (tick.showLabel) {
+          expect(tick.x + tickLabelPx(v.durationMs)).toBeLessThanOrEqual(v.widthPx);
+        }
+      }
+    }
+  });
+
+  it("still draws the tick itself when its label is dropped", () => {
+    const v = view({ pxPerMs: 0.01, viewStartMs: 0 });
+    const ticks = layoutTicks(v);
+    // The end of the visible span is past the last label that fits, so at least
+    // one tick has no label — and it is the last one.
+    const unlabelled = ticks.filter((tick) => !tick.showLabel);
+    expect(unlabelled.length).toBeGreaterThan(0);
+    expect(ticks.at(-1)?.showLabel).toBe(false);
+    expect(ticks[0]?.showLabel).toBe(true);
   });
 
   it("uses whole, human-sized steps", () => {
