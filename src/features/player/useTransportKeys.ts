@@ -1,15 +1,10 @@
 import { useEffect } from "react";
+import { isTypingTarget } from "@/lib/keyboard/typing";
 import { playback } from "@/lib/playback";
 import { frameDurationMs } from "@/lib/time/timecode";
 import { useLibraryStore } from "@/stores/libraryStore";
 
 const NUDGE_MS = 5_000;
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
-}
 
 /**
  * Transport shortcuts (FR-2, NFR-9).

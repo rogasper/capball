@@ -3,6 +3,7 @@ import {
   collectSubtreeIds,
   describeShortcutProblem,
   findShortcutConflict,
+  findTagByShortcut,
   normalizeShortcut,
   tagDeletionImpact,
 } from "@/lib/taxonomy/rules";
@@ -101,5 +102,30 @@ describe("collectSubtreeIds", () => {
 
   it("stops at sibling branches", () => {
     expect(collectSubtreeIds(tags, 4).has(1)).toBe(false);
+  });
+});
+
+describe("findTagByShortcut", () => {
+  const tags = [
+    { id: 1, name: "High Press", shortcutKey: "1" },
+    { id: 2, name: "Build Up", shortcutKey: "B" },
+    { id: 3, name: "Shot", shortcutKey: null },
+  ];
+
+  it("resolves a bound key to its tag", () => {
+    expect(findTagByShortcut(tags, "1")?.name).toBe("High Press");
+  });
+
+  it("ignores case, because keyboards report lower case", () => {
+    expect(findTagByShortcut(tags, "b")?.name).toBe("Build Up");
+  });
+
+  it("returns nothing for an unbound key", () => {
+    expect(findTagByShortcut(tags, "9")).toBeNull();
+  });
+
+  it("returns nothing for a key the transport owns", () => {
+    expect(findTagByShortcut(tags, " ")).toBeNull();
+    expect(findTagByShortcut(tags, "ArrowLeft")).toBeNull();
   });
 });

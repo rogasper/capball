@@ -32,6 +32,8 @@ export type MediaProbe = {
   fpsDen: number | null;
   videoCodec: string | null;
   audioCodec: string | null;
+  /** Index before media data. Null when it does not apply or is unknown. */
+  faststart: boolean | null;
 };
 
 export type JobState = "running" | "done" | "failed" | "cancelled";

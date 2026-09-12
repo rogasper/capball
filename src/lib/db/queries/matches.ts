@@ -1,4 +1,4 @@
-import { count, desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { db } from "@/lib/db/client";
 import { matches, teams, videos } from "@/lib/db/schema";
@@ -17,15 +17,20 @@ export type MatchSummary = {
   videoCount: number;
 };
 
+/**
+ * Aliases are mandatory here for the same reason as in `listEvents`: both team
+ * names come from the `teams` table, so an unaliased select would collapse them
+ * into a single result column.
+ */
 export async function listMatches(): Promise<MatchSummary[]> {
   return db
     .select({
-      id: matches.id,
-      homeTeam: homeTeam.name,
-      awayTeam: awayTeam.name,
-      competition: matches.competition,
-      kickoffAt: matches.kickoffAt,
-      videoCount: count(videos.id),
+      id: sql<number>`${matches.id}`.as("match_id"),
+      homeTeam: sql<string>`${homeTeam.name}`.as("home_team_name"),
+      awayTeam: sql<string>`${awayTeam.name}`.as("away_team_name"),
+      competition: sql<string | null>`${matches.competition}`.as("competition"),
+      kickoffAt: sql<number | null>`${matches.kickoffAt}`.as("kickoff_at"),
+      videoCount: sql<number>`count(${videos.id})`.as("video_count"),
     })
     .from(matches)
     .innerJoin(homeTeam, eq(matches.homeTeamId, homeTeam.id))

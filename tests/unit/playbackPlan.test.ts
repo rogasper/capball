@@ -14,6 +14,7 @@ function probe(overrides: Partial<MediaProbe>): MediaProbe {
     fpsDen: 1,
     videoCodec: "h264",
     audioCodec: "aac",
+    faststart: null,
     ...overrides,
   };
 }
@@ -61,6 +62,38 @@ describe("planPlayback", () => {
     if (plan.kind !== "prepare") throw new Error("expected a prepare plan");
     expect(plan.reason).toContain("vp9");
     expect(plan.reason).toContain("opus");
+  });
+
+  it("prepares a playable file whose index sits at the end, because seeking would be slow", () => {
+    const plan = planPlayback(
+      probe({
+        container: "mov,mp4,m4a,3gp,3g2,mj2",
+        videoCodec: "h264",
+        audioCodec: "aac",
+        faststart: false,
+      }),
+    );
+    expect(plan).toMatchObject({ kind: "prepare", mode: "remux" });
+    if (plan.kind !== "prepare") throw new Error("expected a prepare plan");
+    expect(plan.reason).toMatch(/index/i);
+  });
+
+  it("plays directly when the index is at the front", () => {
+    expect(planPlayback(probe({ faststart: true })).kind).toBe("prepare");
+    expect(
+      planPlayback(
+        probe({
+          container: "mov,mp4,m4a,3gp,3g2,mj2",
+          faststart: true,
+        }),
+      ).kind,
+    ).toBe("direct");
+  });
+
+  it("ignores the index question for containers that have no index to move", () => {
+    // faststart is null for Matroska, which must not be read as "false".
+    const plan = planPlayback(probe({ container: "matroska,webm", faststart: null }));
+    expect(plan).toMatchObject({ kind: "prepare", mode: "remux" });
   });
 
   it("plays a real 1080p60 match recording directly", () => {

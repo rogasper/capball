@@ -22,6 +22,12 @@ const COPYABLE_AUDIO = new Set(["aac", "mp3", "alac"]);
 
 const PLAYABLE_CONTAINER = /(^|,)(mp4|m4v|mov|m4a)(,|$)/;
 
+/** ISO base media files are the ones whose index can sit at the end. */
+export function isIsoBmff(container: string | null): boolean {
+  const name = (container ?? "").toLowerCase();
+  return name.includes("mp4") || name.includes("mov");
+}
+
 export function planPlayback(probe: MediaProbe): PlaybackPlan {
   const container = (probe.container ?? "").toLowerCase();
   const video = (probe.videoCodec ?? "").toLowerCase();
@@ -32,6 +38,18 @@ export function planPlayback(probe: MediaProbe): PlaybackPlan {
   const audioIsCopyable = audio === "" || COPYABLE_AUDIO.has(audio);
 
   if (containerIsPlayable && videoIsCopyable && audioIsCopyable) {
+    // Playable is not the same as seekable: with the index at the end, a player
+    // has to read the tail of the file before it can jump anywhere, which over
+    // a 1 MB-per-request protocol means a visible pause on every seek.
+    if (probe.faststart === false) {
+      return {
+        kind: "prepare",
+        mode: "remux",
+        reason:
+          "the index sits at the end of the file, so seeking would be slow; rearranging it is lossless",
+      };
+    }
+
     return {
       kind: "direct",
       reason: `${video.toUpperCase()} in a container the player supports`,

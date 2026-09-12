@@ -96,6 +96,26 @@ export function reassignmentSummary(eventCount: number, targetTagName: string): 
 }
 
 /**
+ * The tag bound to a pressed key, if any (FR-5.1).
+ *
+ * Key matching is case-insensitive on the way in, because a keyboard reports
+ * "q" while the stored binding is "Q".
+ */
+export function findTagByShortcut<T extends { shortcutKey: string | null }>(
+  tags: T[],
+  key: string,
+): T | null {
+  const normalized = normalizeShortcut(key);
+  if (!normalized) return null;
+
+  return (
+    tags.find(
+      (tag) => tag.shortcutKey !== null && normalizeShortcut(tag.shortcutKey) === normalized,
+    ) ?? null
+  );
+}
+
+/**
  * Every id below `rootId` in the tree, the root included.
  *
  * Used to keep the reassignment picker from offering a tag that is about to be

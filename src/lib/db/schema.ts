@@ -81,6 +81,13 @@ export const videos = sqliteTable(
     path: text("path").notNull(),
     /** A prepared copy in the app cache, when the original cannot be played. */
     playbackPath: text("playback_path"),
+    /**
+     * Whether the index (`moov`) precedes the media data (`mdat`). Null when it
+     * does not apply, or when the file was imported before this was recorded.
+     * With the index at the end, seeking is slow over a protocol that serves
+     * small byte ranges.
+     */
+    faststart: integer("faststart", { mode: "boolean" }),
     fileName: text("file_name").notNull(),
     sizeBytes: integer("size_bytes"),
     durationMs: integer("duration_ms").notNull().default(0),
@@ -148,6 +155,12 @@ export const events = sqliteTable(
       .references(() => tags.id, { onDelete: "cascade" }),
     teamId: integer("team_id").references(() => teams.id, { onDelete: "set null" }),
     playerId: integer("player_id").references(() => players.id, { onDelete: "set null" }),
+    /**
+     * The moment the user actually tagged. `startMs` and `endMs` are the clip
+     * range around it, so without this the moment would be lost the moment the
+     * pre-roll or post-roll defaults changed.
+     */
+    anchorMs: integer("anchor_ms").notNull().default(0),
     startMs: integer("start_ms").notNull(),
     endMs: integer("end_ms").notNull(),
     notes: text("notes"),

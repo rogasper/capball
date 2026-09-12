@@ -6,7 +6,7 @@ import type { Video } from "@/lib/db/queries/videos";
 import * as videosQuery from "@/lib/db/queries/videos";
 import { ipc, type MediaProbe } from "@/lib/ipc";
 import { awaitJob } from "@/lib/jobs/jobEvents";
-import { planPlayback } from "@/lib/media/playbackPlan";
+import { isIsoBmff, planPlayback } from "@/lib/media/playbackPlan";
 import { probeFromVideo } from "@/lib/media/probeFromVideo";
 
 export type PreparePhase = "idle" | "probing" | "preparing" | "missing" | "error";
@@ -203,6 +203,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         videoCodec: probe.videoCodec,
         audioCodec: probe.audioCodec,
         container: probe.container,
+        faststart: probe.faststart,
       });
 
       set({ videos: await videosQuery.listVideos(matchId), note: plan.reason });
@@ -214,17 +215,81 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   /**
-   * Opens a video for playback. The asset scope is granted per file and only
-   * lasts for the session, so a stored match must register its file again when
-   * it is reopened.
+   * Opens a video for playback.
+   *
+   * Two things have to happen here rather than only at import: the asset scope
+   * is granted per file and lasts only for the session, and a file imported
+   * before it could be checked may still need preparing — most often an MP4
+   * whose index sits at the end, which makes every seek slow.
    */
   async selectVideo(id) {
-    const video = get().videos.find((candidate) => candidate.id === id);
+    let video = get().videos.find((candidate) => candidate.id === id);
     if (!video) return;
 
-    const playable = video.playbackPath ?? video.path;
-
     try {
+      const sourceStatus = await ipc.fileStatus(video.path);
+      if (!sourceStatus.exists && !video.playbackPath) {
+        set({
+          ...IDLE,
+          phase: "missing",
+          activeVideoId: id,
+          probe: probeFromVideo(video),
+          playbackUrl: null,
+          error: `${video.fileName} is not where it was. Import it again to relink it.`,
+        });
+        return;
+      }
+
+      // Rows stored before the index placement was recorded are checked once.
+      if (video.faststart === null && !video.playbackPath && isIsoBmff(video.container)) {
+        const probe = await ipc.probeMedia(video.path);
+        await videosQuery.setVideoFaststart(video.id, probe.faststart);
+        video = { ...video, faststart: probe.faststart };
+        const updated = video;
+        set((state) => ({
+          videos: state.videos.map((candidate) =>
+            candidate.id === updated.id ? updated : candidate,
+          ),
+        }));
+      }
+
+      if (!video.playbackPath) {
+        const plan = planPlayback(probeFromVideo(video));
+        if (plan.kind === "prepare") {
+          set({ ...IDLE, phase: "preparing", note: plan.reason, activeVideoId: id });
+          const job = await ipc.startMediaJob(video.path, plan.mode, video.durationMs);
+          set({ activeJobId: job.jobId || null });
+
+          if (!job.reused && job.jobId) {
+            const result = await awaitJob(job.jobId, (event) =>
+              set({ progress: { outTimeMs: event.outTimeMs, totalMs: event.totalMs } }),
+            );
+            if (result.state !== "done") {
+              set({
+                ...IDLE,
+                phase: "error",
+                activeVideoId: id,
+                error:
+                  result.state === "cancelled"
+                    ? "Preparation was cancelled."
+                    : (result.message ?? "This video could not be prepared."),
+              });
+              return;
+            }
+          }
+
+          await videosQuery.setPlaybackPath(video.id, job.output);
+          video = { ...video, playbackPath: job.output };
+          const updated = video;
+          set((state) => ({
+            videos: state.videos.map((candidate) =>
+              candidate.id === updated.id ? updated : candidate,
+            ),
+          }));
+        }
+      }
+
+      const playable = video.playbackPath ?? video.path;
       const status = await ipc.fileStatus(playable);
       if (!status.exists) {
         set({

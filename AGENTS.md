@@ -52,6 +52,7 @@ Use **bun**, not npm, pnpm, or yarn.
 5. Times are **integer milliseconds** (`_ms`). Never store a time as floating-point seconds.
 6. Rust stays thin, and FFmpeg is invoked as a **subprocess**, never linked in-process.
 7. Database access goes through `src/lib/db/` only, using **Drizzle ORM** over the `sqlite-proxy` driver. Never scatter raw SQL through features, and never open the database from a feature module.
+8. **Every projected column in a joined select must carry an explicit unique alias** — `sql\`${tags.name}\`.as("tag_name")`. The SQL plugin returns each row as a map keyed by result column name (`tauri-plugin-sql` `commands.rs` returns `Vec<IndexMap<String, JsonValue>>`), while Drizzle's proxy expects positional values. Two columns named `name` therefore collapse into one key and every later value shifts silently. The tests in `tests/integration/` run the shipped SQL against real SQLite and fail if an alias goes missing.
 
 ## Code style
 

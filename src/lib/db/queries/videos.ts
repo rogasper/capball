@@ -31,6 +31,7 @@ export async function addVideo(input: {
   videoCodec?: string | null;
   audioCodec?: string | null;
   container?: string | null;
+  faststart?: boolean | null;
 }): Promise<Video> {
   const [row] = await db
     .insert(videos)
@@ -48,9 +49,18 @@ export async function addVideo(input: {
       videoCodec: input.videoCodec ?? null,
       audioCodec: input.audioCodec ?? null,
       container: input.container ?? null,
+      faststart: input.faststart ?? null,
     })
     .returning();
   return row;
+}
+
+/**
+ * Records the index placement for a file imported before it was checked, so the
+ * probe only has to run once per legacy row.
+ */
+export async function setVideoFaststart(id: number, faststart: boolean | null): Promise<void> {
+  await db.update(videos).set({ faststart }).where(eq(videos.id, id));
 }
 
 export async function setPlaybackPath(id: number, playbackPath: string): Promise<void> {

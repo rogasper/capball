@@ -49,13 +49,13 @@ export function frameDurationMs(fpsNum: number | null, fpsDen: number | null): n
  * so an event near the start or end never produces an invalid range.
  */
 export function clipRange(
-  centerMs: number,
+  anchorMs: number,
   preRollMs: number,
   postRollMs: number,
   durationMs: number,
 ): { startMs: number; endMs: number } {
-  const start = Math.max(0, centerMs - preRollMs);
-  const end = Math.min(durationMs, centerMs + postRollMs);
+  const start = Math.max(0, anchorMs - preRollMs);
+  const end = Math.min(durationMs, anchorMs + postRollMs);
   return {
     startMs: Math.round(start),
     endMs: Math.round(Math.max(start, end)),

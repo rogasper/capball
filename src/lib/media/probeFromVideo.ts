@@ -17,5 +17,6 @@ export function probeFromVideo(video: Video): MediaProbe {
     fpsDen: video.fpsDen,
     videoCodec: video.videoCodec,
     audioCodec: video.audioCodec,
+    faststart: video.faststart,
   };
 }

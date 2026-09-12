@@ -1,5 +1,5 @@
 import { Plus, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { EditableName } from "@/components/editable-name";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -96,13 +96,9 @@ export function SquadPanel() {
   const awayTeamId = useLibraryStore((state) => state.currentMatch?.awayTeamId);
   const error = useSquadStore((state) => state.error);
   const clearError = useSquadStore((state) => state.clearError);
-  const load = useSquadStore((state) => state.load);
 
-  useEffect(() => {
-    if (homeTeamId === undefined || awayTeamId === undefined) return;
-    void load([homeTeamId, awayTeamId]);
-  }, [load, homeTeamId, awayTeamId]);
-
+  // Squads are loaded by the shell, so they are available to the tagging
+  // context even when this panel is not on screen.
   if (homeTeamId === undefined || awayTeamId === undefined) return null;
 
   return (

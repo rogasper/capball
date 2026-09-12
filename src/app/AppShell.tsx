@@ -1,28 +1,42 @@
 import { Film } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EventList } from "@/features/events/EventList";
 import { MatchList } from "@/features/library/MatchList";
 import { MatchPanel } from "@/features/library/MatchPanel";
 import { PlayerStage } from "@/features/player/PlayerStage";
 import { TransportBar } from "@/features/player/TransportBar";
 import { useTransportKeys } from "@/features/player/useTransportKeys";
 import { MediaToolsNotice } from "@/features/settings/MediaToolsNotice";
+import { ActiveContext } from "@/features/tagging/ActiveContext";
+import { CaptureRail } from "@/features/tagging/CaptureRail";
+import { useCaptureKeys } from "@/features/tagging/useCaptureKeys";
 import { TaxonomyPanel } from "@/features/taxonomy/TaxonomyPanel";
 import { initializeDatabase } from "@/lib/db";
 import { ipc } from "@/lib/ipc";
+import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useSquadStore } from "@/stores/squadStore";
 import { useTagStore } from "@/stores/tagStore";
 
 export function AppShell() {
   const hasVideo = useLibraryStore((state) => state.playbackUrl) !== null;
+  const currentMatchId = useLibraryStore((state) => state.currentMatchId);
+  const homeTeamId = useLibraryStore((state) => state.currentMatch?.homeTeamId);
+  const awayTeamId = useLibraryStore((state) => state.currentMatch?.awayTeamId);
+
   const loadMatches = useLibraryStore((state) => state.loadMatches);
   const loadTags = useTagStore((state) => state.load);
+  const loadEvents = useEventStore((state) => state.load);
+  const clearEvents = useEventStore((state) => state.clear);
+  const loadSquads = useSquadStore((state) => state.load);
   const setTools = useSettingsStore((state) => state.setTools);
 
   const [bootError, setBootError] = useState<string | null>(null);
 
   useTransportKeys(hasVideo);
+  useCaptureKeys(hasVideo);
 
   useEffect(() => {
     void ipc
@@ -52,6 +66,21 @@ export function AppShell() {
     };
   }, [loadMatches, loadTags]);
 
+  // Events belong to the open match, so they are reloaded when it changes.
+  useEffect(() => {
+    if (currentMatchId === null) {
+      clearEvents();
+      return;
+    }
+    void loadEvents(currentMatchId);
+  }, [currentMatchId, loadEvents, clearEvents]);
+
+  // Squads are loaded here so the tagging context always has both rosters.
+  useEffect(() => {
+    if (homeTeamId === undefined || awayTeamId === undefined) return;
+    void loadSquads([homeTeamId, awayTeamId]);
+  }, [loadSquads, homeTeamId, awayTeamId]);
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex items-center gap-2 border-b border-border px-4 py-3">
@@ -75,15 +104,21 @@ export function AppShell() {
 
         <main className="flex min-h-0 flex-1 flex-col">
           <PlayerStage />
+          <ActiveContext />
+          <CaptureRail />
           <TransportBar />
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-border bg-card p-4">
-          <Tabs defaultValue="match">
+          <Tabs defaultValue="events">
             <TabsList className="w-full">
+              <TabsTrigger value="events">Events</TabsTrigger>
               <TabsTrigger value="match">Match</TabsTrigger>
               <TabsTrigger value="tags">Tags</TabsTrigger>
             </TabsList>
+            <TabsContent value="events" className="pt-4">
+              <EventList />
+            </TabsContent>
             <TabsContent value="match" className="pt-4">
               <MatchPanel />
             </TabsContent>
