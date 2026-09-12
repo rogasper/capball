@@ -22,6 +22,8 @@ describe("decodeSettings", () => {
       exportExtraAfterMs: "1000",
       exportConcatenate: "true",
       annotationWindowMs: "3000",
+      pitchLengthM: "100",
+      pitchWidthM: "64",
       annotationStyle:
         '{"stroke":"#FF4C4C","fill":"#112233","width":0.005,"fontSize":0.05,"opacity":0.8}',
     };
@@ -36,6 +38,8 @@ describe("decodeSettings", () => {
       exportExtraAfterMs: 1_000,
       exportConcatenate: true,
       annotationWindowMs: 3_000,
+      pitchLengthM: 100,
+      pitchWidthM: 64,
       annotationStyle: {
         stroke: "#FF4C4C",
         fill: "#112233",

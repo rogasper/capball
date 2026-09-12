@@ -1,12 +1,14 @@
 import { Film } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollingTabsList } from "@/components/scrolling-tabs";
+import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs";
 import { AnnotationPanel } from "@/features/annotate/AnnotationPanel";
 import { useAnnotationShortcuts } from "@/features/annotate/useAnnotationShortcuts";
 import { EventList } from "@/features/events/EventList";
 import { ExportPanel } from "@/features/export/ExportPanel";
 import { MatchList } from "@/features/library/MatchList";
 import { MatchPanel } from "@/features/library/MatchPanel";
+import { PitchPanel } from "@/features/pitch/PitchPanel";
 import { PlayerStage } from "@/features/player/PlayerStage";
 import { TransportBar } from "@/features/player/TransportBar";
 import { useTransportKeys } from "@/features/player/useTransportKeys";
@@ -21,6 +23,7 @@ import { Timeline } from "@/features/timeline/Timeline";
 import { initializeDatabase } from "@/lib/db";
 import { ipc } from "@/lib/ipc";
 import { useAnnotationStore } from "@/stores/annotationStore";
+import { useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -30,6 +33,7 @@ import { useTagStore } from "@/stores/tagStore";
 export function AppShell() {
   const hasVideo = useLibraryStore((state) => state.playbackUrl) !== null;
   const currentMatchId = useLibraryStore((state) => state.currentMatchId);
+  const activeVideoId = useLibraryStore((state) => state.activeVideoId);
   const homeTeamId = useLibraryStore((state) => state.currentMatch?.homeTeamId);
   const awayTeamId = useLibraryStore((state) => state.currentMatch?.awayTeamId);
 
@@ -85,6 +89,22 @@ export function AppShell() {
     void loadEvents(currentMatchId);
   }, [currentMatchId, loadEvents, clearEvents]);
 
+  // Calibrations belong to a video. Read the pitch size on demand rather than
+  // subscribing, so editing it in the panel does not restart the flow and throw
+  // away the points already picked.
+  useEffect(() => {
+    const calibrations = useCalibrationStore.getState();
+    if (activeVideoId === null) {
+      calibrations.clear();
+      return;
+    }
+    const settings = useSettingsStore.getState();
+    void calibrations.load(activeVideoId, {
+      lengthM: settings.pitchLengthM,
+      widthM: settings.pitchWidthM,
+    });
+  }, [activeVideoId]);
+
   // Squads are loaded here so the tagging context always has both rosters.
   useEffect(() => {
     if (homeTeamId === undefined || awayTeamId === undefined) return;
@@ -122,14 +142,31 @@ export function AppShell() {
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-border bg-card p-4">
           <Tabs defaultValue="events">
-            <TabsList className="w-full">
-              <TabsTrigger value="events">Events</TabsTrigger>
-              <TabsTrigger value="match">Match</TabsTrigger>
-              <TabsTrigger value="tags">Tags</TabsTrigger>
-              <TabsTrigger value="draw">Draw</TabsTrigger>
-              <TabsTrigger value="export">Export</TabsTrigger>
-              <TabsTrigger value="settings">Settings</TabsTrigger>
-            </TabsList>
+            {/* Each tab is as wide as its own label, and the row scrolls when
+                they do not fit — with a chevron when something is hidden. */}
+            <ScrollingTabsList>
+              <TabsTrigger value="events" className="flex-none px-2.5">
+                Events
+              </TabsTrigger>
+              <TabsTrigger value="match" className="flex-none px-2.5">
+                Match
+              </TabsTrigger>
+              <TabsTrigger value="tags" className="flex-none px-2.5">
+                Tags
+              </TabsTrigger>
+              <TabsTrigger value="draw" className="flex-none px-2.5">
+                Draw
+              </TabsTrigger>
+              <TabsTrigger value="pitch" className="flex-none px-2.5">
+                Pitch
+              </TabsTrigger>
+              <TabsTrigger value="export" className="flex-none px-2.5">
+                Export
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="flex-none px-2.5">
+                Settings
+              </TabsTrigger>
+            </ScrollingTabsList>
             <TabsContent value="events" className="pt-4">
               <EventList />
             </TabsContent>
@@ -141,6 +178,9 @@ export function AppShell() {
             </TabsContent>
             <TabsContent value="draw" className="pt-4">
               <AnnotationPanel />
+            </TabsContent>
+            <TabsContent value="pitch" className="pt-4">
+              <PitchPanel />
             </TabsContent>
             <TabsContent value="export" className="pt-4">
               <ExportPanel />

@@ -1,6 +1,7 @@
 import { type AnnotationStyle, DEFAULT_STYLE } from "@/lib/annotate/types";
 import { DEFAULT_TEMPLATE } from "@/lib/export/filename";
 import type { ExportMode } from "@/lib/ipc";
+import { DEFAULT_PITCH_LENGTH_M, DEFAULT_PITCH_WIDTH_M } from "@/lib/pitch/pitchModel";
 
 /**
  * User preferences, persisted in the `settings` table as text.
@@ -21,6 +22,9 @@ export type SettingsValues = {
   exportConcatenate: boolean;
   /** How long a new shape is on screen by default (FR-20.4). */
   annotationWindowMs: number;
+  /** Pitch dimensions, because they change what a stored metre means (FR-30.1). */
+  pitchLengthM: number;
+  pitchWidthM: number;
   /** The style a new shape starts from, so arrows are not restyled one by one. */
   annotationStyle: AnnotationStyle;
 };
@@ -36,6 +40,8 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   exportConcatenate: false,
   annotationWindowMs: 2_500,
   annotationStyle: { ...DEFAULT_STYLE },
+  pitchLengthM: DEFAULT_PITCH_LENGTH_M,
+  pitchWidthM: DEFAULT_PITCH_WIDTH_M,
 };
 
 /** Bumped only if the meaning of a stored value changes. */
@@ -54,6 +60,12 @@ function readMs(rows: Record<string, string>, key: string, fallback: number): nu
 function readText(rows: Record<string, string>, key: string, fallback: string): string {
   const raw = rows[key];
   return raw !== undefined && raw.trim().length > 0 ? raw : fallback;
+}
+
+/** A dimension in metres: positive and finite, or the default. */
+function readMetres(rows: Record<string, string>, key: string, fallback: number): number {
+  const value = Number(rows[key]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function readUnit(value: unknown, fallback: number): number {
@@ -111,6 +123,8 @@ export function decodeSettings(rows: Record<string, string>): SettingsValues {
     exportConcatenate: rows.exportConcatenate === "true",
     annotationWindowMs: readMs(rows, "annotationWindowMs", DEFAULT_SETTINGS.annotationWindowMs),
     annotationStyle: readStyle(rows, "annotationStyle", DEFAULT_SETTINGS.annotationStyle),
+    pitchLengthM: readMetres(rows, "pitchLengthM", DEFAULT_SETTINGS.pitchLengthM),
+    pitchWidthM: readMetres(rows, "pitchWidthM", DEFAULT_SETTINGS.pitchWidthM),
   };
 }
 

@@ -3,6 +3,7 @@ import {
   type AnySQLiteColumn,
   index,
   integer,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -227,6 +228,56 @@ export const annotations = sqliteTable(
     uniqueIndex("annotations_uid_unique").on(table.uid),
     index("annotations_event_idx").on(table.eventId),
   ],
+);
+
+/**
+ * A calibration: where the pitch is in this video (R1, FR-30.1).
+ *
+ * The reference points are the record, not the matrix — the homography is
+ * derived at runtime, so a better model later can be fitted from the same clicks
+ * without asking the user to pick again (technical-design-R1 D19).
+ */
+export const calibrations = sqliteTable(
+  "calibrations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    videoId: integer("video_id")
+      .notNull()
+      .references(() => videos.id, { onDelete: "cascade" }),
+    /** The moment this calibration applies from, so a second one can start mid-video (OQ-4). */
+    fromMs: integer("from_ms").notNull().default(0),
+    pitchLengthM: real("pitch_length_m").notNull().default(105),
+    pitchWidthM: real("pitch_width_m").notNull().default(68),
+    /** RMS reprojection error of the fit, in video pixels. */
+    rmsErrorPx: real("rms_error_px").notNull().default(0),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex("calibrations_video_from_unique").on(table.videoId, table.fromMs),
+    index("calibrations_video_idx").on(table.videoId),
+  ],
+);
+
+/** A reference point: which named pitch feature was clicked, and where. */
+export const calibrationPoints = sqliteTable(
+  "calibration_points",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    calibrationId: integer("calibration_id")
+      .notNull()
+      .references(() => calibrations.id, { onDelete: "cascade" }),
+    /** The feature's stable key, e.g. `right-penalty-spot`. */
+    feature: text("feature").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    /** Normalised to the frame, like every other stored coordinate. */
+    imageU: real("image_u").notNull(),
+    imageV: real("image_v").notNull(),
+    /** The feature's real position, in metres from the centre of the pitch. */
+    xM: real("x_m").notNull(),
+    yM: real("y_m").notNull(),
+    createdAt,
+  },
+  (table) => [index("calibration_points_calibration_idx").on(table.calibrationId)],
 );
 
 export const settings = sqliteTable("settings", {

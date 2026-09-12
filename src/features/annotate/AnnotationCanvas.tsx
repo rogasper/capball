@@ -1,7 +1,7 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useContentRect } from "@/features/player/useContentRect";
 import {
   boxGeometry,
-  contentRect,
   type Handle,
   type HandleName,
   handlesFor,
@@ -61,16 +61,18 @@ type Drag =
 export function AnnotationCanvas({
   stageRef,
   videoRef,
+  /** False while another layer, such as calibration, is taking the clicks. */
+  interactive = true,
 }: {
   stageRef: RefObject<HTMLElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
+  interactive?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [rect, setRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
+  const rect = useContentRect(stageRef, videoRef);
   const dragRef = useRef<Drag | null>(null);
   const freehandRef = useRef<Point[]>([]);
   const [handles, setHandles] = useState<Handle[]>([]);
-
   const playbackUrl = useLibraryStore((state) => state.playbackUrl);
   const paused = usePlayerStore((state) => state.paused);
   const eventId = useAnnotationStore((state) => state.eventId);
@@ -94,43 +96,6 @@ export function AnnotationCanvas({
     }),
     [selectedEvent],
   );
-
-  // The picture's rect inside the stage: the canvas is placed exactly on it.
-  useEffect(() => {
-    const stage = stageRef.current;
-    const video = videoRef.current;
-    if (!stage || !video) return;
-
-    const measure = () => {
-      const next = contentRect(
-        stage.clientWidth,
-        stage.clientHeight,
-        video.videoWidth,
-        video.videoHeight,
-      );
-      setRect((prev) =>
-        prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h
-          ? prev
-          : next,
-      );
-    };
-
-    measure();
-    video.addEventListener("loadedmetadata", measure);
-    video.addEventListener("resize", measure);
-
-    // jsdom has no ResizeObserver; the canvas only matters in a real window.
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(stage);
-
-    return () => {
-      observer?.disconnect();
-      video.removeEventListener("loadedmetadata", measure);
-      video.removeEventListener("resize", measure);
-    };
-    // `playbackUrl` deliberately absent: a new source fires `loadedmetadata`,
-    // which is what re-measures.
-  }, [stageRef, videoRef]);
 
   /**
    * The frame the canvas covers, so its own origin is the picture's origin.
@@ -291,7 +256,7 @@ export function AnnotationCanvas({
   };
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (rect.w <= 0 || !selectedEvent) return;
+    if (!interactive || rect.w <= 0 || !selectedEvent) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const px = pointOf(event);
 
@@ -404,6 +369,7 @@ export function AnnotationCanvas({
           width: rect.w,
           height: rect.h,
           cursor: tool ? "crosshair" : "default",
+          pointerEvents: interactive ? undefined : "none",
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -412,7 +378,7 @@ export function AnnotationCanvas({
         onDoubleClick={onDoubleClick}
       />
 
-      {tool === null && handles.length > 0 && (
+      {interactive && tool === null && handles.length > 0 && (
         <div className="pointer-events-none absolute" style={{ left: rect.x, top: rect.y }}>
           {handles.map((handle) => (
             <button

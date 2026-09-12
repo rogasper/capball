@@ -29,6 +29,8 @@ const TABLES = [
   "events",
   "clips",
   "annotations",
+  "calibration_points",
+  "calibrations",
   "videos",
   "matches",
   "players",

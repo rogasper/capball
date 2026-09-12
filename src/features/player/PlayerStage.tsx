@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { AnnotationCanvas } from "@/features/annotate/AnnotationCanvas";
+import { CalibrationOverlay } from "@/features/pitch/CalibrationOverlay";
 import { playback } from "@/lib/playback";
+import { useCalibrationStore } from "@/stores/calibrationStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlayerStore } from "@/stores/playerStore";
 
@@ -18,6 +20,8 @@ function EmptyStage() {
 export function PlayerStage() {
   const playbackUrl = useLibraryStore((state) => state.playbackUrl);
   const playerError = usePlayerStore((state) => state.error);
+  // Calibration takes the clicks while a point is being placed.
+  const picking = useCalibrationStore((state) => state.pendingFeature) !== null;
   const stageRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -46,7 +50,8 @@ export function PlayerStage() {
         preload="metadata"
       />
 
-      <AnnotationCanvas stageRef={stageRef} videoRef={videoRef} />
+      <AnnotationCanvas stageRef={stageRef} videoRef={videoRef} interactive={!picking} />
+      <CalibrationOverlay stageRef={stageRef} videoRef={videoRef} />
 
       {!playbackUrl && <EmptyStage />}
 
