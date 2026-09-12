@@ -1,3 +1,4 @@
+import { type AnnotationStyle, DEFAULT_STYLE } from "@/lib/annotate/types";
 import { DEFAULT_TEMPLATE } from "@/lib/export/filename";
 import type { ExportMode } from "@/lib/ipc";
 
@@ -18,6 +19,10 @@ export type SettingsValues = {
   exportExtraBeforeMs: number;
   exportExtraAfterMs: number;
   exportConcatenate: boolean;
+  /** How long a new shape is on screen by default (FR-20.4). */
+  annotationWindowMs: number;
+  /** The style a new shape starts from, so arrows are not restyled one by one. */
+  annotationStyle: AnnotationStyle;
 };
 
 export const DEFAULT_SETTINGS: SettingsValues = {
@@ -29,10 +34,14 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   exportExtraBeforeMs: 0,
   exportExtraAfterMs: 0,
   exportConcatenate: false,
+  annotationWindowMs: 2_500,
+  annotationStyle: { ...DEFAULT_STYLE },
 };
 
 /** Bumped only if the meaning of a stored value changes. */
 export const SETTINGS_VERSION = 1;
+
+const HEX_COLOUR = /^#[0-9a-fA-F]{3,8}$/;
 
 function readMs(rows: Record<string, string>, key: string, fallback: number): number {
   const raw = rows[key];
@@ -47,6 +56,47 @@ function readText(rows: Record<string, string>, key: string, fallback: string): 
   return raw !== undefined && raw.trim().length > 0 ? raw : fallback;
 }
 
+function readUnit(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readColour(value: unknown, fallback: string): string {
+  return typeof value === "string" && HEX_COLOUR.test(value) ? value : fallback;
+}
+
+/**
+ * A stored style, merged over the default one field at a time, so a single bad
+ * value does not discard the rest of a user's chosen style.
+ */
+function readStyle(
+  rows: Record<string, string>,
+  key: string,
+  fallback: AnnotationStyle,
+): AnnotationStyle {
+  const raw = rows[key];
+  if (raw === undefined) return { ...fallback };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...fallback };
+  }
+  if (typeof parsed !== "object" || parsed === null) return { ...fallback };
+
+  const candidate = parsed as Partial<AnnotationStyle>;
+  return {
+    stroke: readColour(candidate.stroke, fallback.stroke),
+    fill: candidate.fill === null ? null : readColour(candidate.fill, fallback.fill ?? "#FFFFFF"),
+    width: readUnit(candidate.width, fallback.width),
+    fontSize: readUnit(candidate.fontSize, fallback.fontSize),
+    opacity:
+      typeof candidate.opacity === "number" && candidate.opacity >= 0 && candidate.opacity <= 1
+        ? candidate.opacity
+        : fallback.opacity,
+  };
+}
+
 export function decodeSettings(rows: Record<string, string>): SettingsValues {
   const mode = rows.exportMode;
 
@@ -59,6 +109,8 @@ export function decodeSettings(rows: Record<string, string>): SettingsValues {
     exportExtraBeforeMs: readMs(rows, "exportExtraBeforeMs", DEFAULT_SETTINGS.exportExtraBeforeMs),
     exportExtraAfterMs: readMs(rows, "exportExtraAfterMs", DEFAULT_SETTINGS.exportExtraAfterMs),
     exportConcatenate: rows.exportConcatenate === "true",
+    annotationWindowMs: readMs(rows, "annotationWindowMs", DEFAULT_SETTINGS.annotationWindowMs),
+    annotationStyle: readStyle(rows, "annotationStyle", DEFAULT_SETTINGS.annotationStyle),
   };
 }
 
@@ -67,7 +119,9 @@ export function encodeSettings(patch: Partial<SettingsValues>): Record<string, s
 
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    rows[key] = value === null ? "" : String(value);
+    if (value === null) rows[key] = "";
+    else if (typeof value === "object") rows[key] = JSON.stringify(value);
+    else rows[key] = String(value);
   }
 
   return rows;

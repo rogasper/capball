@@ -191,20 +191,42 @@ export const clips = sqliteTable(
   (table) => [index("clips_event_idx").on(table.eventId)],
 );
 
-/** Reserved for R1 telestration; present from the start so R1 needs no migration. */
+/**
+ * A shape drawn on an event (R1, FR-20).
+ *
+ * Geometry is normalised to the video's content rect, not to the window, and
+ * points are stored inside the shape's own box (technical-design-R1 §5.3).
+ * `window_mode` is stored rather than resolved times because `'event'` must
+ * follow the event's range if it is edited and `'clip'` cannot be resolved
+ * until export time.
+ */
 export const annotations = sqliteTable(
   "annotations",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Client-generated identity, which is what makes transfer idempotent. */
+    uid: text("uid").notNull(),
     eventId: integer("event_id")
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
-    tMs: integer("t_ms").notNull(),
     kind: text("kind").notNull(),
-    dataJson: text("data_json").notNull(),
+    /** `moment` | `event` | `clip`. */
+    windowMode: text("window_mode").notNull().default("moment"),
+    /** Duration used when the mode is `moment`. */
+    windowMs: integer("window_ms").notNull().default(2500),
+    geometryJson: text("geometry_json").notNull(),
+    styleJson: text("style_json").notNull(),
+    /** Text content for a text shape, or a label for a zone. */
+    label: text("label"),
+    /** Paint order: the layers panel shows this order, front to back. */
+    z: integer("z").notNull().default(0),
     createdAt,
+    updatedAt: integer("updated_at").notNull().default(sql`(unixepoch())`),
   },
-  (table) => [index("annotations_event_idx").on(table.eventId)],
+  (table) => [
+    uniqueIndex("annotations_uid_unique").on(table.uid),
+    index("annotations_event_idx").on(table.eventId),
+  ],
 );
 
 export const settings = sqliteTable("settings", {

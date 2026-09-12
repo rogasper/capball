@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { AnnotationCanvas } from "@/features/annotate/AnnotationCanvas";
 import { playback } from "@/lib/playback";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlayerStore } from "@/stores/playerStore";
@@ -17,6 +18,7 @@ function EmptyStage() {
 export function PlayerStage() {
   const playbackUrl = useLibraryStore((state) => state.playbackUrl);
   const playerError = usePlayerStore((state) => state.error);
+  const stageRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -28,15 +30,23 @@ export function PlayerStage() {
   useEffect(() => playback.onState((state) => usePlayerStore.getState().apply(state)), []);
 
   return (
-    <section className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
+    <section
+      ref={stageRef}
+      className="relative flex min-h-0 flex-1 items-center justify-center bg-black"
+    >
       {/* biome-ignore lint/a11y/useMediaCaption: match footage is supplied by the user and carries no caption track; the app cannot invent one. */}
       <video
         ref={videoRef}
         src={playbackUrl ?? undefined}
-        className={playbackUrl ? "max-h-full max-w-full" : "hidden"}
+        // The element fills the stage and letterboxes the picture inside it, so
+        // the annotation canvas can be placed on the picture exactly by
+        // `contentRect` rather than by guessing.
+        className={playbackUrl ? "size-full object-contain" : "hidden"}
         playsInline
         preload="metadata"
       />
+
+      <AnnotationCanvas stageRef={stageRef} videoRef={videoRef} />
 
       {!playbackUrl && <EmptyStage />}
 

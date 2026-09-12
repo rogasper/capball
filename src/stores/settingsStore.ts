@@ -26,6 +26,8 @@ type ExportOptions = Pick<
   | "exportConcatenate"
 >;
 
+type AnnotationDefaults = Pick<SettingsValues, "annotationWindowMs" | "annotationStyle">;
+
 type SettingsState = SettingsValues & {
   tools: ToolStatus | null;
   loaded: boolean;
@@ -35,6 +37,7 @@ type SettingsState = SettingsValues & {
   setPreRollMs: (ms: number) => void;
   setPostRollMs: (ms: number) => void;
   setExportOptions: (patch: Partial<ExportOptions>) => void;
+  setAnnotationDefaults: (patch: Partial<AnnotationDefaults>) => void;
   reset: () => void;
   setTools: (tools: ToolStatus) => void;
   reportError: (message: string) => void;
@@ -83,6 +86,14 @@ export const useSettingsStore = create<SettingsState>((set) => {
       }
       if (patch.exportExtraAfterMs !== undefined) {
         next.exportExtraAfterMs = Math.max(0, Math.round(patch.exportExtraAfterMs));
+      }
+      persist(next);
+    },
+
+    setAnnotationDefaults(patch) {
+      const next: Partial<AnnotationDefaults> = { ...patch };
+      if (patch.annotationWindowMs !== undefined) {
+        next.annotationWindowMs = Math.max(0, Math.round(patch.annotationWindowMs));
       }
       persist(next);
     },

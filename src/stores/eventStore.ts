@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { EventRow } from "@/lib/db/queries/events";
 import * as eventsQuery from "@/lib/db/queries/events";
+import { useAnnotationStore } from "@/stores/annotationStore";
 
 /**
  * A ready-to-store event.
@@ -215,6 +216,11 @@ export const useEventStore = create<EventState>((set, get) => ({
       events: state.events.filter((candidate) => candidate.id !== eventId),
       undoStack: state.undoStack.filter((id) => id !== eventId),
     }));
+
+    // The drawings belong to the event, so the editor must let go of it too.
+    if (useAnnotationStore.getState().eventId === eventId) {
+      useAnnotationStore.getState().clear();
+    }
 
     try {
       await eventsQuery.deleteEvent(eventId);

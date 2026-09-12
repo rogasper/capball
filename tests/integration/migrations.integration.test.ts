@@ -43,10 +43,11 @@ const LEGACY_EVENT = `
 `;
 
 describe("migrations", () => {
-  it("ships at least the two we expect, in order", () => {
-    expect(files.length).toBeGreaterThanOrEqual(2);
+  it("ships the migrations we expect, in order", () => {
+    expect(files.length).toBeGreaterThanOrEqual(3);
     expect(files[0]).toMatch(/^0000_/);
     expect(files[1]).toMatch(/^0001_/);
+    expect(files[2]).toMatch(/^0002_/);
   });
 
   it("recovers the tagged moment for events captured before the column existed", () => {
@@ -93,5 +94,50 @@ describe("migrations", () => {
     // The backfill only rewrites rows that are still zero, so a fresh insert
     // keeps its explicit value and nothing is silently overwritten.
     expect(row.anchor_ms).toBe(0);
+  });
+});
+
+/**
+ * A migration is recorded only after its last statement succeeds, so an
+ * interruption — a quit, a crash, a reload mid-run — leaves the file pending and
+ * every later launch retries it from the top.
+ *
+ * That makes a bare `DROP TABLE` a trap: the retry would fail on the table it
+ * already dropped, and the app could not open its library at all. It happened
+ * once, which is why these two cases exist.
+ */
+describe("a migration interrupted halfway", () => {
+  it("recovers when the destructive statement already ran", () => {
+    const db = freshDatabase();
+    for (const file of files) apply(db, file);
+    db.exec(LEGACY_EVENT);
+    db.exec("DROP TABLE annotations");
+
+    expect(() => apply(db, files[2] as string)).not.toThrow();
+
+    const table = db
+      .prepare(
+        "SELECT count(*) AS c FROM sqlite_master WHERE type = 'table' AND name = 'annotations'",
+      )
+      .get() as { c: number };
+    expect(table.c).toBe(1);
+    // The library itself is untouched by rebuilding the annotation table.
+    const events = db.prepare("SELECT count(*) AS c FROM events").get() as { c: number };
+    expect(events.c).toBe(1);
+  });
+
+  it("recovers when only the recording was lost", () => {
+    const db = freshDatabase();
+    for (const file of files) apply(db, file);
+
+    expect(() => apply(db, files[2] as string)).not.toThrow();
+
+    const columns = db
+      .prepare("PRAGMA table_info(annotations)")
+      .all()
+      .map((column) => (column as { name: string }).name);
+    expect(columns).toContain("uid");
+    expect(columns).toContain("window_mode");
+    expect(columns).toContain("geometry_json");
   });
 });

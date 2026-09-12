@@ -4,6 +4,7 @@ import { isTypingTarget } from "@/lib/keyboard/typing";
 import { playback } from "@/lib/playback";
 import { findTagByShortcut } from "@/lib/taxonomy/rules";
 import { clipRange } from "@/lib/time/timecode";
+import { useAnnotationStore } from "@/stores/annotationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -44,8 +45,15 @@ export function useCaptureKeys(enabled: boolean): void {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return;
 
+      // FR-20.7: while a drawing tool is in hand the editor owns the keyboard,
+      // so a key bound to a tag must not create an event.
+      const editor = useAnnotationStore.getState();
+      if (editor.tool !== null) return;
+
       // Undo the last capture, even if that same letter is also bound to a tag.
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        // With a shape selected, undo belongs to the drawing, not the capture.
+        if (editor.selectedId !== null) return;
         event.preventDefault();
         void useEventStore.getState().undoLast();
         return;

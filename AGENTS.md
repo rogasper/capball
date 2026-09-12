@@ -53,6 +53,7 @@ Use **bun**, not npm, pnpm, or yarn.
 6. Rust stays thin, and FFmpeg is invoked as a **subprocess**, never linked in-process.
 7. Database access goes through `src/lib/db/` only, using **Drizzle ORM** over the `sqlite-proxy` driver. Never scatter raw SQL through features, and never open the database from a feature module.
 8. **Every projected column in a joined select must carry an explicit unique alias** — `sql\`${tags.name}\`.as("tag_name")`. The SQL plugin returns each row as a map keyed by result column name (`tauri-plugin-sql` `commands.rs` returns `Vec<IndexMap<String, JsonValue>>`), while Drizzle's proxy expects positional values. Two columns named `name` therefore collapse into one key and every later value shifts silently. The tests in `tests/integration/` run the shipped SQL against real SQLite and fail if an alias goes missing.
+9. **Every migration must be re-runnable.** The runner applies a file statement by statement and records it only after the last statement succeeds, so an interrupted migration is retried from the top on the next launch. Write `CREATE TABLE IF NOT EXISTS`, `DROP TABLE IF EXISTS`, and indexes with `IF NOT EXISTS`. A bare `DROP TABLE` is a trap: the retry fails on the table it already dropped, and every launch after that reports `no such table` and cannot open the library — which happened once, with `0002`. `tests/integration/migrations.integration.test.ts` covers both half-applied states.
 
 ## Code style
 

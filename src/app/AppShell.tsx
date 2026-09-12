@@ -1,6 +1,8 @@
 import { Film } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AnnotationPanel } from "@/features/annotate/AnnotationPanel";
+import { useAnnotationShortcuts } from "@/features/annotate/useAnnotationShortcuts";
 import { EventList } from "@/features/events/EventList";
 import { ExportPanel } from "@/features/export/ExportPanel";
 import { MatchList } from "@/features/library/MatchList";
@@ -18,6 +20,7 @@ import { TaxonomyPanel } from "@/features/taxonomy/TaxonomyPanel";
 import { Timeline } from "@/features/timeline/Timeline";
 import { initializeDatabase } from "@/lib/db";
 import { ipc } from "@/lib/ipc";
+import { useAnnotationStore } from "@/stores/annotationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -41,6 +44,7 @@ export function AppShell() {
 
   useTransportKeys(hasVideo);
   useCaptureKeys(hasVideo);
+  useAnnotationShortcuts();
   useReviewRunner();
 
   useEffect(() => {
@@ -73,6 +77,7 @@ export function AppShell() {
 
   // Events belong to the open match, so they are reloaded when it changes.
   useEffect(() => {
+    useAnnotationStore.getState().clear();
     if (currentMatchId === null) {
       clearEvents();
       return;
@@ -121,6 +126,7 @@ export function AppShell() {
               <TabsTrigger value="events">Events</TabsTrigger>
               <TabsTrigger value="match">Match</TabsTrigger>
               <TabsTrigger value="tags">Tags</TabsTrigger>
+              <TabsTrigger value="draw">Draw</TabsTrigger>
               <TabsTrigger value="export">Export</TabsTrigger>
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
@@ -132,6 +138,9 @@ export function AppShell() {
             </TabsContent>
             <TabsContent value="tags" className="pt-4">
               <TaxonomyPanel />
+            </TabsContent>
+            <TabsContent value="draw" className="pt-4">
+              <AnnotationPanel />
             </TabsContent>
             <TabsContent value="export" className="pt-4">
               <ExportPanel />

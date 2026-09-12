@@ -19,6 +19,7 @@ import { ON_DEMAND, useThumbnail } from "@/lib/media/thumbnails";
 import { playback } from "@/lib/playback";
 import { formatTimecode } from "@/lib/time/timecode";
 import { cn } from "@/lib/utils";
+import { useAnnotationStore } from "@/stores/annotationStore";
 import { applyFilters, isFilterActive, useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 
@@ -71,9 +72,53 @@ function EventThumbnail({ event, sourcePath }: { event: EventRow; sourcePath: st
   );
 }
 
+/**
+ * Deleting an event takes its drawings with it, so the dialog says how many
+ * before it happens (FR-20.6) rather than surprising the user afterwards.
+ */
+function DeleteEventDialog({ event }: { event: EventRow }) {
+  const remove = useEventStore((state) => state.remove);
+  const countDrawings = useAnnotationStore((state) => state.countDrawings);
+  const [drawings, setDrawings] = useState<number | null>(null);
+
+  return (
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (open) void countDrawings(event.id).then(setDrawings);
+      }}
+    >
+      <AlertDialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Delete ${event.tagName} at ${formatTimecode(event.anchorMs)}`}
+        >
+          <Trash2 className="size-3" aria-hidden="true" />
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this event?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {event.tagName} at {formatTimecode(event.anchorMs)} is removed from the match.
+            {drawings !== null && drawings > 0
+              ? ` Its ${drawings} drawing${drawings === 1 ? "" : "s"} go with it.`
+              : ""}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => void remove(event.id)}>
+            Delete event
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function EventRowItem({ event, sourcePath }: { event: EventRow; sourcePath: string | null }) {
   const lastCapturedId = useEventStore((state) => state.lastCapturedId);
-  const remove = useEventStore((state) => state.remove);
 
   return (
     <li
@@ -87,7 +132,10 @@ function EventRowItem({ event, sourcePath }: { event: EventRow; sourcePath: stri
 
         <button
           type="button"
-          onClick={() => playback.seekMs(event.anchorMs)}
+          onClick={() => {
+            playback.seekMs(event.anchorMs);
+            void useAnnotationStore.getState().load(event.id);
+          }}
           aria-label={`Jump to ${formatTimecode(event.anchorMs)}`}
           className="min-w-0 flex-1 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
           title={`Jump to ${formatTimecode(event.anchorMs)} (clip ${formatTimecode(
@@ -109,31 +157,7 @@ function EventRowItem({ event, sourcePath }: { event: EventRow; sourcePath: stri
           </span>
         </button>
 
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Delete ${event.tagName} at ${formatTimecode(event.anchorMs)}`}
-            >
-              <Trash2 className="size-3" aria-hidden="true" />
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete this event?</AlertDialogTitle>
-              <AlertDialogDescription>
-                {event.tagName} at {formatTimecode(event.anchorMs)} is removed from the match.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Keep it</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={() => void remove(event.id)}>
-                Delete event
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <DeleteEventDialog event={event} />
       </div>
 
       <div className="mt-1 pl-18">

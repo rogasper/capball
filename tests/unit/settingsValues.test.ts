@@ -21,6 +21,9 @@ describe("decodeSettings", () => {
       exportExtraBeforeMs: "2000",
       exportExtraAfterMs: "1000",
       exportConcatenate: "true",
+      annotationWindowMs: "3000",
+      annotationStyle:
+        '{"stroke":"#FF4C4C","fill":"#112233","width":0.005,"fontSize":0.05,"opacity":0.8}',
     };
 
     expect(decodeSettings(values)).toEqual({
@@ -32,6 +35,14 @@ describe("decodeSettings", () => {
       exportExtraBeforeMs: 2_000,
       exportExtraAfterMs: 1_000,
       exportConcatenate: true,
+      annotationWindowMs: 3_000,
+      annotationStyle: {
+        stroke: "#FF4C4C",
+        fill: "#112233",
+        width: 0.005,
+        fontSize: 0.05,
+        opacity: 0.8,
+      },
     });
   });
 
