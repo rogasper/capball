@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_STYLE } from "@/lib/annotate/types";
 import type { EventRow } from "@/lib/db/queries/events";
 import type { Video } from "@/lib/db/queries/videos";
 import {
@@ -8,8 +9,10 @@ import {
   buildAnalysisFile,
   buildTaxonomyFile,
   describeImport,
+  eventKeyOf,
   isAnalysisFile,
   parseAnalysisFile,
+  parseEventKey,
 } from "@/lib/transfer/analysis";
 
 const video = {
@@ -120,6 +123,57 @@ describe("parseAnalysisFile", () => {
       parseAnalysisFile(JSON.stringify({ format: ANALYSIS_FORMAT, version: 1 })),
     ).toThrow(/no taxonomy/i);
   });
+
+  it("fills the version 2 sections with nothing when a version 1 file has none", () => {
+    const v1 = {
+      format: ANALYSIS_FORMAT,
+      version: 1,
+      exportedAt: "2026-09-12T00:00:00.000Z",
+      match: {
+        homeTeam: "Manchester United",
+        awayTeam: "Sabah",
+        competition: null,
+        season: null,
+        kickoffAt: null,
+        venue: null,
+        notes: null,
+      },
+      taxonomy: [],
+      videos: [],
+      events: [],
+    };
+
+    expect(parseAnalysisFile(JSON.stringify(v1))).toMatchObject({
+      calibrations: [],
+      annotations: [],
+      positions: [],
+    });
+  });
+});
+
+describe("event keys", () => {
+  it("round-trips a video name, a tag and a moment", () => {
+    expect(parseEventKey(eventKeyOf("match.mp4", "High Press", 100_000))).toEqual({
+      videoFileName: "match.mp4",
+      tag: "High Press",
+      anchorMs: 100_000,
+    });
+  });
+
+  it("keeps a tag that contains the separator readable", () => {
+    // Splitting on the first and last separator leaves the tag intact.
+    expect(parseEventKey(eventKeyOf("match.mp4", "Press | Trap", 1_000))).toEqual({
+      videoFileName: "match.mp4",
+      tag: "Press | Trap",
+      anchorMs: 1_000,
+    });
+  });
+
+  it("refuses a key that is not one, rather than reading it wrongly", () => {
+    expect(parseEventKey("nonsense")).toBeNull();
+    expect(parseEventKey("a|b|not-a-number")).toBeNull();
+    expect(parseEventKey("|tag|1000")).toBeNull();
+  });
 });
 
 describe("isAnalysisFile", () => {
@@ -129,6 +183,91 @@ describe("isAnalysisFile", () => {
 
     expect(isAnalysisFile(taxonomy)).toBe(false);
     expect(isAnalysisFile(analysis)).toBe(true);
+  });
+});
+
+describe("a version 2 file carries the R1 sections", () => {
+  const key = eventKeyOf("first-half.mp4", "High Press", 100_000);
+
+  it("keeps the drawings, the calibration and the positions beside the events", () => {
+    const file = buildAnalysisFile({
+      match: {
+        homeTeam: "Manchester United",
+        awayTeam: "Sabah",
+        competition: null,
+        season: null,
+        kickoffAt: null,
+        venue: null,
+        notes: null,
+      },
+      videos: [video],
+      events: [event],
+      taxonomy: [],
+      calibrations: [
+        {
+          videoFileName: "first-half.mp4",
+          fromMs: 0,
+          pitchLengthM: 105,
+          pitchWidthM: 68,
+          rmsErrorPx: 1.8,
+          points: [{ feature: "centre-spot", imageU: 0.5, imageV: 0.5, xM: 0, yM: 0 }],
+        },
+      ],
+      annotations: [
+        {
+          uid: "annotation-1",
+          eventKey: key,
+          kind: "arrow",
+          windowMode: "moment",
+          windowMs: 2_000,
+          geometry: { x: 0.1, y: 0.2, w: 0.3, h: 0.1, rotation: 0 },
+          style: { ...DEFAULT_STYLE },
+          label: null,
+          z: 0,
+        },
+      ],
+      positions: [
+        {
+          uid: "position-1",
+          eventKey: key,
+          teamName: "Manchester United",
+          playerName: "Saka",
+          shirtNumber: 7,
+          xM: -14.25,
+          yM: 6.75,
+          imageU: 0.42,
+          imageV: 0.58,
+        },
+      ],
+    });
+
+    expect(file.version).toBe(2);
+    expect(file.calibrations[0]?.videoFileName).toBe("first-half.mp4");
+    expect(file.annotations[0]?.eventKey).toBe(key);
+    expect(file.positions[0]).toMatchObject({ playerName: "Saka", xM: -14.25 });
+    // Named fields, not blobs: a person can read the drawing back.
+    expect(file.annotations[0]?.geometry).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.1, rotation: 0 });
+  });
+
+  it("defaults the sections to empty for a caller that has none", () => {
+    const file = buildAnalysisFile({
+      match: {
+        homeTeam: "Manchester United",
+        awayTeam: "Sabah",
+        competition: null,
+        season: null,
+        kickoffAt: null,
+        venue: null,
+        notes: null,
+      },
+      videos: [video],
+      events: [event],
+      taxonomy: [],
+    });
+
+    expect(file.calibrations).toEqual([]);
+    expect(file.annotations).toEqual([]);
+    expect(file.positions).toEqual([]);
   });
 });
 

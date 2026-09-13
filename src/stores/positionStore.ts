@@ -108,8 +108,12 @@ export const usePositionStore = create<PositionState>((set, get) => ({
         yM: input.yM,
       });
 
+      // Replacing the same player's marker keeps the row's own uid: the write is
+      // an update, so the identity that transfer is idempotent by does not change.
+      const existing = positions.find((candidate) => candidate.playerId === target.playerId);
       const row: PositionRow = {
         id,
+        uid: existing?.uid ?? input.uid,
         eventId,
         playerId: target.playerId,
         playerName: target.playerName,

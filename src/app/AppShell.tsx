@@ -22,10 +22,12 @@ import { TaxonomyPanel } from "@/features/taxonomy/TaxonomyPanel";
 import { Timeline } from "@/features/timeline/Timeline";
 import { initializeDatabase } from "@/lib/db";
 import { ipc } from "@/lib/ipc";
+import { describeCacheReport, pruneCaches } from "@/lib/media/cache";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useMagnifierStore } from "@/stores/magnifierStore";
 import { usePositionStore } from "@/stores/positionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSquadStore } from "@/stores/squadStore";
@@ -69,6 +71,22 @@ export function AppShell() {
         await initializeDatabase();
         if (cancelled) return;
         await Promise.all([loadMatches(), loadTags()]);
+        if (cancelled) return;
+
+        // The cache policy runs once per launch, after the library is known, so
+        // it knows which derived files are still referenced. A failure is
+        // recorded where Settings can show it rather than swallowed.
+        void pruneCaches()
+          .then((report) => {
+            if (!cancelled) useSettingsStore.getState().reportCache(describeCacheReport(report));
+          })
+          .catch((error: unknown) => {
+            if (!cancelled) {
+              useSettingsStore
+                .getState()
+                .reportCacheError(error instanceof Error ? error.message : String(error));
+            }
+          });
       } catch (error) {
         if (!cancelled) {
           setBootError(error instanceof Error ? error.message : String(error));
@@ -95,6 +113,9 @@ export function AppShell() {
   // subscribing, so editing it in the panel does not restart the flow and throw
   // away the points already picked.
   useEffect(() => {
+    // A magnified view belongs to the frame it was opened on, so changing the
+    // video closes it rather than showing the new footage at the old moment.
+    useMagnifierStore.getState().close();
     const calibrations = useCalibrationStore.getState();
     if (activeVideoId === null) {
       calibrations.clear();

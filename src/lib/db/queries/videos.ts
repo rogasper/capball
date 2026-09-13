@@ -12,6 +12,17 @@ export async function listVideos(matchId: number): Promise<Video[]> {
     .orderBy(asc(videos.createdAt), asc(videos.id));
 }
 
+/** Every source path in the library, for the cache policy (NFR-22). */
+export async function listAllVideoPaths(): Promise<string[]> {
+  const rows = await db
+    .select({ path: videos.path, playbackPath: videos.playbackPath })
+    .from(videos);
+
+  return rows.flatMap((row) =>
+    row.playbackPath && row.playbackPath !== row.path ? [row.path, row.playbackPath] : [row.path],
+  );
+}
+
 export async function getVideo(id: number): Promise<Video | undefined> {
   const rows = await db.select().from(videos).where(eq(videos.id, id)).limit(1);
   return rows[0];

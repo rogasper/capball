@@ -88,3 +88,30 @@ export function isShapeKind(value: string): value is ShapeKind {
 export function isWindowMode(value: string): value is WindowMode {
   return (WINDOW_MODES as readonly string[]).includes(value);
 }
+
+/**
+ * Whether a value from outside the app — an imported file — is usable geometry.
+ *
+ * The query layer trusts what it wrote. A file from elsewhere does not get that
+ * trust: a bad `geometry_json` would be read back on the next open and throw,
+ * taking the event's whole drawing list with it, so an import checks first and
+ * skips what it cannot use.
+ */
+export function isGeometry(value: unknown): value is Geometry {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<Geometry>;
+  const numbers = [candidate.x, candidate.y, candidate.w, candidate.h, candidate.rotation];
+  if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) {
+    return false;
+  }
+  if (candidate.points === undefined) return true;
+  return (
+    Array.isArray(candidate.points) &&
+    candidate.points.every(
+      (point) =>
+        Array.isArray(point) &&
+        point.length === 2 &&
+        point.every((number) => typeof number === "number" && Number.isFinite(number)),
+    )
+  );
+}

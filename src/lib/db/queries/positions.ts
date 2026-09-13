@@ -13,6 +13,8 @@ import { events, players, positions, teams } from "@/lib/db/schema";
 
 export type PositionRow = {
   id: number;
+  /** Client-generated identity, carried so transfer can be idempotent (D21). */
+  uid: string;
   eventId: number;
   playerId: number;
   playerName: string;
@@ -52,6 +54,7 @@ export async function listPositions(eventId: number): Promise<PositionRow[]> {
   return db
     .select({
       id: sql<number>`${positions.id}`.as("position_id"),
+      uid: sql<string>`${positions.uid}`.as("position_uid"),
       eventId: sql<number>`${positions.eventId}`.as("position_event_id"),
       playerId: sql<number>`${positions.playerId}`.as("position_player_id"),
       playerName: sql<string>`${players.name}`.as("position_player_name"),

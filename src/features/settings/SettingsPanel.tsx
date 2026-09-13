@@ -1,7 +1,8 @@
-import { Download, FileJson, Loader2, RotateCcw, Upload } from "lucide-react";
+import { Download, FileJson, HardDrive, Loader2, RotateCcw, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { describeCacheReport, pruneCaches } from "@/lib/media/cache";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exportMatchAnalysis, exportTaxonomy, importFile } from "./transfer";
@@ -26,6 +27,9 @@ export function SettingsPanel() {
   const reset = useSettingsStore((state) => state.reset);
   const clearError = useSettingsStore((state) => state.clearError);
   const tools = useSettingsStore((state) => state.tools);
+  const cacheNote = useSettingsStore((state) => state.cacheNote);
+  const cacheError = useSettingsStore((state) => state.cacheError);
+  const reportCache = useSettingsStore((state) => state.reportCache);
 
   const currentMatchId = useLibraryStore((state) => state.currentMatchId);
 
@@ -37,6 +41,19 @@ export function SettingsPanel() {
   useEffect(() => {
     void useSettingsStore.getState().load();
   }, []);
+
+  const cleanCache = async () => {
+    setBusy("cache");
+    try {
+      reportCache(describeCacheReport(await pruneCaches()));
+    } catch (caught) {
+      useSettingsStore
+        .getState()
+        .reportCacheError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const run = async (label: string, action: () => Promise<string | null | undefined>) => {
     setBusy(label);
@@ -166,6 +183,30 @@ export function SettingsPanel() {
                 ? (tools.ffmpegVersion ?? "FFmpeg is installed.")
                 : "FFmpeg was not found. Import and tagging still work; preparing and exporting need it."}
             </p>
+          </section>
+
+          <section className="space-y-2 border-t border-border pt-4">
+            <h3 className="text-label text-muted-foreground">Cache</h3>
+            <p className="text-caption text-muted-foreground">
+              Prepared playback copies, extracted frames and export overlays live in the app cache,
+              never beside your footage. They are cleared when their video leaves the library, and
+              export scratch goes after a day.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => void cleanCache()}
+            >
+              <HardDrive className="size-3.5" aria-hidden="true" />
+              Clean up now
+            </Button>
+            {cacheNote && <p className="text-label text-muted-foreground">{cacheNote}</p>}
+            {cacheError && (
+              <p role="alert" className="text-label text-warning">
+                The cache could not be cleaned: {cacheError}
+              </p>
+            )}
           </section>
 
           <section className="border-t border-border pt-4">

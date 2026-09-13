@@ -24,6 +24,7 @@ const countPositions = vi.mocked(positionsQuery.countPositions);
 function row(id: number, playerId: number, patch: Partial<PositionRow> = {}): PositionRow {
   return {
     id,
+    uid: `uid-${id}`,
     eventId: 7,
     playerId,
     playerName: `Player ${playerId}`,
