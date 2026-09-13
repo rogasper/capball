@@ -10,9 +10,13 @@ Everything runs on your machine. No account, no upload, no backend.
 
 ## Status
 
-**R0 is feature-complete and deliberately not released.** It is a working tagging tool: import a match, tag it, review it, export clips. It is not yet the analysis tool the project is aiming at — drawing on the video, tagging individual players, and a pitch view with player positions are planned for a later release and will need their own requirements document first. See [`plans/roadmap.md`](plans/roadmap.md) *(kept locally; see [Documentation](#documentation))*.
+**R1 is feature-complete and deliberately not released.** R0 made a working tagging tool — import a match, tag it, review it, export clips. R1 adds the analysis half: draw on the frame, mark where the pitch is, record where players were, see the shape on a top-down pitch, and burn the drawings into exported clips. It is used daily by its author; it has not been published, and the manual acceptance checklist has not yet been run end to end.
+
+See [`plans/roadmap-R1.md`](plans/roadmap-R1.md) for the milestones and what each one proves *(kept locally; see [Documentation](#documentation))*.
 
 ## What works today
+
+### Tagging (R0)
 
 - **Import** one or more videos per match — halves, or several camera angles. Anything the OS player cannot open directly is prepared for you, losslessly where possible, with progress.
 - **Playback** with full keyboard control: play, seek, frame step, speed, and a transport that keeps up with large 1080p files.
@@ -23,6 +27,27 @@ Everything runs on your machine. No account, no upload, no backend.
 - **Review mode** that plays a filtered set back to back.
 - **Clip export**, single or in bulk, fast or frame-accurate, optionally joined into one file, with file names templated from match, tag and time. Existing files are never overwritten.
 - **Thumbnails**, **analysis export**, and **taxonomy export/import** so a vocabulary can be shared.
+
+### Drawing and positions (R1)
+
+- **Draw on a paused frame** — arrow, line, rectangle, ellipse, polygon, freehand stroke and text, with move, resize, rotate, restyle, layer order, and undo/redo. Each shape has its own time window: its moment, its event's range, or the whole clip.
+- **Calibrate the pitch once per video** by picking named landmarks (spots, area corners, the centre circle). The app draws the pitch those clicks imply over the frame, so a wrong pick is visible immediately, and it reports how closely the fit lines up and how much of the pitch your points actually cover.
+- **Pick on a magnified frame** when the video is too small to click precisely — the frame at full resolution, zoomed, with the outline drawn on it. The same view is used for marking players.
+- **Mark where players were** by clicking them on the frame. Positions are stored as pitch metres, survive a window resize, and appear on a top-down pitch with shirt numbers and team names. Markers show while the playhead is inside the event and hide when you scrub away, since a position only tells the truth at its own moment. Two moments can be compared, told apart by marker shape as well as colour.
+- **Burn the drawings into exported clips**, each shape at its own time. Off by default, because carrying drawings means re-encoding the picture — the app says so, and the measured cost is about 14% over an accurate cut.
+- **Analysis files carry the drawings, the calibration and the positions**, so a match can be handed to another machine whole. Importing the same file twice adds nothing.
+
+## Limits
+
+R1 is deliberate about what it does not claim:
+
+- **No height.** A position is where a player stood on the pitch plane, never how high. One camera cannot recover height, so none is invented.
+- **No automatic detection or tracking.** Every position is placed by hand. Nothing guesses who a player is or follows them between frames.
+- **One moment per event.** Positions belong to a tagged moment, not to a range of frames.
+- **A partial view is honest, not magic.** Where your reference points do not reach, a position is reported as a guess and the pitch outline is not drawn there. Calibrating from a single penalty area is usable inside that area and unreliable outside it.
+- **A drawing needs a tagged moment.** Drawings belong to events; there are no loose annotations.
+
+The manual acceptance checklist is in [`plans/qa-R1.md`](plans/qa-R1.md).
 
 ## Stack
 
@@ -72,8 +97,11 @@ bun run dev
 ## Project structure
 
 ```text
-src/features/   one slice per product area: library, player, timeline, tagging, events, review, export, settings
-src/lib/        ipc (the only place that talks to Tauri), db (Drizzle), media, jobs, playback, time, settings, transfer
+src/features/   one slice per product area: library, player, timeline, tagging, events,
+                review, annotate, pitch, export, settings
+src/lib/        ipc (the only place that talks to Tauri), db (Drizzle), media, jobs, playback,
+                time, settings, transfer, annotate (pure geometry), pitch (pure maths),
+                render (the one canvas renderer)
 src-tauri/      thin Rust shell: plugins, commands, subprocess jobs
 tests/          unit tests, and integration tests that run the shipped SQL against real SQLite
 ```

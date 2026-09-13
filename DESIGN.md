@@ -13,7 +13,7 @@ Make match analysis feel like watching, not like data entry. The interface exist
 
 - Product / brand: capball
 - Audience: football fans who analyse matches for pleasure; secondarily, grassroots coaches reviewing their own recordings
-- Product surface: desktop application only (Tauri, macOS first). No marketing site, no mobile, no web app in R0.
+- Product surface: desktop application only (Tauri, macOS first). No marketing site, no mobile, no web app in R1.
 - Personality: calm, precise, football-literate — a tool a coach would trust, not a social app.
 
 ## Style Foundations
@@ -118,6 +118,20 @@ Concise, plain, football-literate. Use the user's own vocabulary: match, event, 
 **Dialogs** — Used for destructive confirmations, match creation, and settings. Title at `text-heading`; primary action on the right; the destructive action uses `--danger` and never autofocuses.
 
 **Empty states** — Explain the next action in one sentence and offer it ("Import a match video"). No illustration required, but never an empty panel without explanation.
+
+**Drawing layer** — Sits on the video's **content rect**, never on the element, so a shape stays over the same pixels in a letterboxed window and in an export. The canvas is presentational; the **layers panel is the accessible surface** — selection, reorder and delete are reachable by keyboard and readable by a screen reader. Transform handles are DOM controls, at least `24×24px` with an `11px` hit radius, and are never painted into the video. Drawing happens on a paused frame only, and an active tool **must suppress tag shortcuts** (no keystroke creates an event). The layer redraws on change, never on a timer.
+
+**Pitch outline and markers** — The outline is a verification aid, not decoration: it is drawn over the frame in `#22D3EE` at a thin weight so it reads as a check against the pitch lines underneath. Reference-point markers are numbered, `16px`, and draggable so a point can be finished by eye. **Only the part of the pitch the reference points support is drawn**; where the picks do not reach, an outline would be extrapolation and is omitted rather than shown as fiction.
+
+**Pitch view** — A top-down schematic in metres, drawn from the same model as the frame outline so the two can never disagree. Every marker carries the shirt number and the team name, and a comparison uses **shape as well as colour** (filled disc against dashed ring). No positions for the moment ⇒ say so; never an empty pitch that looks like a bug. An uncalibrated video explains and shows nothing.
+
+**Position markers on the frame** — Shown while the playhead is inside the event's own range, hidden outside it, because a marker only tells the truth at its anchor moment. **Marking keeps them visible** wherever the playhead is, since placing a point needs the existing ones as context. The rule is stated in the panel rather than left to be discovered.
+
+**Calibration honesty states** — Three states must be visible and distinct, never blended: the fit is **good** (≤2 px), **acceptable** (2–6 px), or **poor** (>6 px, refused with the suspect point named). Coverage is reported as a share of the **pitch**, not the frame, and a narrow region is a warning rather than a silent fact. A quality warning is text at `text-label` in `--warning`, never a colour-only cue.
+
+**Magnified picker** — A full-stage overlay showing the paused frame at full resolution with zoom and pan, the pitch outline and markers drawn on the same canvas so a click cannot disagree with what is shown. It serves both calibration and player marking. Escape closes it, and the header always states what a click will do.
+
+**Drawings in an export** — The burn-in option is **off by default**. When enabled, the panel states the cost plainly: the clip re-encodes, so it takes as long as an accurate cut. A clip whose event has no drawings is unaffected and must not be made slower.
 
 ## Quality gates
 
