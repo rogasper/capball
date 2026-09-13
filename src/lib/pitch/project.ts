@@ -107,6 +107,11 @@ export function outlinePrimitives(
     opacity: style.opacity,
     stroke: style.stroke,
     fill: null,
+    // The outline is a stroked line, never a fill, so these are inert — but a
+    // primitive carries them, and `solid` is the honest default (R2, FR-20.12).
+    fillPattern: "solid" as const,
+    patternScale: 0,
+    patternAngle: 0,
     width: style.width,
     center: [0.5, 0.5] as [number, number],
     rotation: 0,

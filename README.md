@@ -12,6 +12,8 @@ Everything runs on your machine. No account, no upload, no backend.
 
 **R1 is feature-complete and deliberately not released.** R0 made a working tagging tool — import a match, tag it, review it, export clips. R1 adds the analysis half: draw on the frame, mark where the pitch is, record where players were, see the shape on a top-down pitch, and burn the drawings into exported clips. It is used daily by its author; it has not been published, and the manual acceptance checklist has not yet been run end to end.
 
+**R2 (Analyse & Report) has begun**, against the R1 gate rather than after it, on the author's decision: the first milestone is **reshaping a drawing corner by corner and patterned fills** (`plans/roadmap-R2.md`, M12). Everything already documented below is R1 and unchanged; the reshape and pattern entries below are the R2 work that has landed.
+
 See [`plans/roadmap-R1.md`](plans/roadmap-R1.md) for the milestones and what each one proves *(kept locally; see [Documentation](#documentation))*.
 
 ## What works today
@@ -31,6 +33,8 @@ See [`plans/roadmap-R1.md`](plans/roadmap-R1.md) for the milestones and what eac
 ### Drawing and positions (R1)
 
 - **Draw on a paused frame** — arrow, line, rectangle, ellipse, polygon, freehand stroke and text, with move, resize, rotate, restyle, layer order, and undo/redo. Each shape has its own time window: its moment, its event's range, or the whole clip.
+- **Reshape a drawing corner by corner** — drag a corner to move it, click the small hollow grip on an edge to add one, and remove a corner with `Delete` or a double click. A rectangle that loses a corner becomes a zone with three sides, without redrawing it. The whole edit is one undo step.
+- **Fill a zone with a pattern** — solid, hatch, cross-hatch, or outline only, with the line colour and the fill colour set independently. A patterned zone marks an area without hiding the players in it, and it is what tells two zones apart when colour is not an option. Patterns are drawn from the shape's geometry, so they stay sharp in an exported clip.
 - **Calibrate the pitch once per video** by picking named landmarks (spots, area corners, the centre circle). The app draws the pitch those clicks imply over the frame, so a wrong pick is visible immediately, and it reports how closely the fit lines up and how much of the pitch your points actually cover.
 - **Pick on a magnified frame** when the video is too small to click precisely — the frame at full resolution, zoomed, with the outline drawn on it. The same view is used for marking players.
 - **Mark where players were** by clicking them on the frame. Positions are stored as pitch metres, survive a window resize, and appear on a top-down pitch with shirt numbers and team names. Markers show while the playhead is inside the event and hide when you scrub away, since a position only tells the truth at its own moment. Two moments can be compared, told apart by marker shape as well as colour.

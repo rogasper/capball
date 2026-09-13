@@ -1,4 +1,4 @@
-import { type AnnotationStyle, DEFAULT_STYLE } from "@/lib/annotate/types";
+import { type AnnotationStyle, DEFAULT_STYLE, normaliseStyle } from "@/lib/annotate/types";
 import { DEFAULT_TEMPLATE } from "@/lib/export/filename";
 import type { ExportMode } from "@/lib/ipc";
 import { DEFAULT_PITCH_LENGTH_M, DEFAULT_PITCH_WIDTH_M } from "@/lib/pitch/pitchModel";
@@ -103,7 +103,9 @@ function readStyle(
   if (typeof parsed !== "object" || parsed === null) return { ...fallback };
 
   const candidate = parsed as Partial<AnnotationStyle>;
-  return {
+  // Through `normaliseStyle`, so a stored style without the R2 pattern fields
+  // keeps rendering as solid instead of reaching the renderer as undefined.
+  return normaliseStyle({
     stroke: readColour(candidate.stroke, fallback.stroke),
     fill: candidate.fill === null ? null : readColour(candidate.fill, fallback.fill ?? "#FFFFFF"),
     width: readUnit(candidate.width, fallback.width),
@@ -112,7 +114,10 @@ function readStyle(
       typeof candidate.opacity === "number" && candidate.opacity >= 0 && candidate.opacity <= 1
         ? candidate.opacity
         : fallback.opacity,
-  };
+    fillPattern: candidate.fillPattern,
+    patternScale: candidate.patternScale,
+    patternAngle: candidate.patternAngle,
+  });
 }
 
 export function decodeSettings(rows: Record<string, string>): SettingsValues {

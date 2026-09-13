@@ -21,7 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { ShapeKind } from "@/lib/annotate/types";
+import type { FillPattern, ShapeKind } from "@/lib/annotate/types";
+import { canEditVertices } from "@/lib/annotate/vertices";
 import { cn } from "@/lib/utils";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { usePlayerStore } from "@/stores/playerStore";
@@ -44,6 +45,33 @@ const TOOLS: { kind: ShapeKind; label: string; Icon: typeof Square }[] = [
 ];
 
 const STROKE_SWATCHES = ["#4C8DFF", "#FF4C4C", "#FFB020", "#34D399", "#FFFFFF"];
+
+/**
+ * Fills carry an alpha so a zone marks an area without hiding the players in
+ * it, and the swatch row is the *pattern's* colour, independent of the outline
+ * (FR-20.12).
+ */
+const FILL_SWATCHES = ["#4C8DFF", "#FFB020", "#34D399", "#FF4C4C"];
+
+const PATTERN_LABELS: Record<FillPattern, string> = {
+  solid: "Solid",
+  hatch: "Hatch",
+  crossHatch: "Cross-hatch",
+};
+
+/** Spacing is a fraction of the picture's width, so it scales with the export. */
+const PATTERN_SCALES: { label: string; value: number }[] = [
+  { label: "Fine", value: 0.01 },
+  { label: "Medium", value: 0.02 },
+  { label: "Coarse", value: 0.04 },
+];
+
+const PATTERN_ANGLES: { label: string; value: number }[] = [
+  { label: "Diagonal up", value: -Math.PI / 4 },
+  { label: "Diagonal down", value: Math.PI / 4 },
+  { label: "Horizontal", value: 0 },
+  { label: "Vertical", value: Math.PI / 2 },
+];
 
 export function AnnotationToolbar() {
   const paused = usePlayerStore((state) => state.paused);
@@ -148,6 +176,94 @@ export function AnnotationToolbar() {
         </div>
       </div>
 
+      {style.fill !== null && (
+        <div className="space-y-1.5">
+          <Label className="text-label text-muted-foreground">Fill pattern</Label>
+          <div className="flex flex-wrap items-center gap-1">
+            {FILL_SWATCHES.map((colour) => (
+              <button
+                key={colour}
+                type="button"
+                aria-label={`Fill colour ${colour}`}
+                aria-pressed={style.fill?.startsWith(colour) ?? false}
+                className={cn(
+                  "size-5 rounded-full border",
+                  style.fill?.startsWith(colour) ? "border-foreground" : "border-border",
+                )}
+                style={{ background: `${colour}33` }}
+                onClick={() => setStyle({ fill: `${colour}33` })}
+              />
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1">
+            <Select
+              value={style.fillPattern}
+              onValueChange={(value) => setStyle({ fillPattern: value as FillPattern })}
+            >
+              <SelectTrigger
+                size="sm"
+                className="h-7 flex-1 text-label"
+                aria-label="Fill pattern type"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(PATTERN_LABELS) as FillPattern[]).map((pattern) => (
+                  <SelectItem key={pattern} value={pattern}>
+                    {PATTERN_LABELS[pattern]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {style.fillPattern !== "solid" && (
+              <>
+                <Select
+                  value={String(style.patternScale)}
+                  onValueChange={(value) => setStyle({ patternScale: Number(value) })}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="h-7 w-24 text-label"
+                    aria-label="Hatch spacing"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PATTERN_SCALES.map(({ label, value }) => (
+                      <SelectItem key={label} value={String(value)}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={String(style.patternAngle)}
+                  onValueChange={(value) => setStyle({ patternAngle: Number(value) })}
+                >
+                  <SelectTrigger size="sm" className="h-7 w-28 text-label" aria-label="Hatch angle">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PATTERN_ANGLES.map(({ label, value }) => (
+                      <SelectItem key={label} value={String(value)}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          </div>
+
+          <p className="text-caption text-muted-foreground">
+            A hatch or cross-hatch keeps the area readable and tells two zones apart without colour.
+          </p>
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <Label className="text-label text-muted-foreground">On screen for</Label>
         <div className="flex items-center gap-2">
@@ -193,6 +309,11 @@ export function AnnotationToolbar() {
           />
           <p className="text-caption text-muted-foreground">
             A label is what makes a shape legible without relying on its colour.
+          </p>
+          <p className="text-caption text-muted-foreground">
+            {canEditVertices(selected.kind)
+              ? "Drag a corner to reshape it. The small hollow grip on an edge adds a corner, and Delete on a corner removes that one — a rectangle with a corner removed becomes a zone with three sides."
+              : "Move, resize or rotate this shape: its handles are its box, not corners you can remove."}
           </p>
         </div>
       )}

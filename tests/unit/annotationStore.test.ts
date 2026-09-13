@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Annotation, Geometry } from "@/lib/annotate/types";
+import {
+  absolutePoints,
+  pathGeometry,
+  type Rect,
+  shapeVertices,
+  twoPointGeometry,
+} from "@/lib/annotate/geometry";
+import type { Annotation, Geometry, ShapeKind } from "@/lib/annotate/types";
 import { DEFAULT_STYLE } from "@/lib/annotate/types";
 import * as annotationsQuery from "@/lib/db/queries/annotations";
 import { useAnnotationStore } from "@/stores/annotationStore";
@@ -14,6 +21,7 @@ vi.mock("@/lib/db/queries/annotations", () => ({
   listAnnotations: vi.fn(),
   createAnnotation: vi.fn(),
   updateAnnotationGeometry: vi.fn(),
+  updateAnnotationShape: vi.fn(),
   updateAnnotationStyle: vi.fn(),
   updateAnnotationWindow: vi.fn(),
   updateAnnotationLabel: vi.fn(),
@@ -25,6 +33,7 @@ vi.mock("@/lib/db/queries/annotations", () => ({
 const listAnnotations = vi.mocked(annotationsQuery.listAnnotations);
 const createAnnotation = vi.mocked(annotationsQuery.createAnnotation);
 const updateAnnotationGeometry = vi.mocked(annotationsQuery.updateAnnotationGeometry);
+const updateAnnotationShape = vi.mocked(annotationsQuery.updateAnnotationShape);
 const updateAnnotationStyle = vi.mocked(annotationsQuery.updateAnnotationStyle);
 const updateAnnotationWindow = vi.mocked(annotationsQuery.updateAnnotationWindow);
 const updateAnnotationLabel = vi.mocked(annotationsQuery.updateAnnotationLabel);
@@ -74,6 +83,7 @@ beforeEach(() => {
 
   createAnnotation.mockImplementation(async (input) => ({ id: nextId++, ...input }) as Annotation);
   updateAnnotationGeometry.mockResolvedValue(undefined);
+  updateAnnotationShape.mockResolvedValue(undefined);
   updateAnnotationStyle.mockResolvedValue(undefined);
   updateAnnotationWindow.mockResolvedValue(undefined);
   updateAnnotationLabel.mockResolvedValue(undefined);
@@ -303,5 +313,97 @@ describe("the capture contract", () => {
     useAnnotationStore.getState().setTool("ellipse");
     expect(useAnnotationStore.getState().draft).toBeNull();
     expect(useAnnotationStore.getState().draftPoints).toBeNull();
+  });
+});
+
+describe("reshaping (FR-20.11)", () => {
+  const FRAME: Rect = { x: 0, y: 0, w: 1_000, h: 1_000 };
+
+  function select(kind: ShapeKind, geometry: Geometry): void {
+    useAnnotationStore.setState({
+      eventId: 7,
+      annotations: [row(1, "a", { kind, geometry })],
+      selectedId: 1,
+      undoStack: [],
+      redoStack: [],
+      error: null,
+    });
+  }
+
+  it("turns a rectangle into a triangle when a corner is removed, and undo restores both", async () => {
+    select("rect", { x: 0.2, y: 0.2, w: 0.4, h: 0.2, rotation: 0 });
+
+    await useAnnotationStore.getState().removeVertexAt(1);
+
+    const shaped = useAnnotationStore.getState().annotations[0];
+    expect(shaped.kind).toBe("polygon");
+    expect(absolutePoints(shaped.geometry)).toHaveLength(3);
+    // Kind and geometry are written together, once.
+    expect(updateAnnotationShape).toHaveBeenCalledTimes(1);
+    expect(updateAnnotationShape.mock.calls[0][1]).toBe("polygon");
+
+    await useAnnotationStore.getState().undo();
+
+    const restored = useAnnotationStore.getState().annotations[0];
+    expect(restored.kind).toBe("rect");
+    // A rectangle has no stored points: its vertices are its box corners.
+    expect(shapeVertices(restored.geometry, restored.kind)).toHaveLength(4);
+    // The undo wrote the rectangle back as a rectangle, not as a 4-point polygon.
+    expect(updateAnnotationShape.mock.calls.at(-1)?.[1]).toBe("rect");
+  });
+
+  it("adds a corner to a rectangle, which is stored as a polygon from then on", async () => {
+    select("rect", { x: 0.2, y: 0.2, w: 0.4, h: 0.2, rotation: 0 });
+
+    await useAnnotationStore.getState().insertVertexAfter(0);
+
+    const shaped = useAnnotationStore.getState().annotations[0];
+    expect(shaped.kind).toBe("polygon");
+    expect(absolutePoints(shaped.geometry)).toHaveLength(5);
+    expect(updateAnnotationShape.mock.calls[0][1]).toBe("polygon");
+  });
+
+  it("refuses to take an end off a line, and says why", async () => {
+    select("line", twoPointGeometry([0.2, 0.2], [0.6, 0.6]));
+
+    await useAnnotationStore.getState().removeVertexAt(0);
+
+    expect(updateAnnotationShape).not.toHaveBeenCalled();
+    expect(useAnnotationStore.getState().annotations[0].kind).toBe("line");
+    expect(useAnnotationStore.getState().error).toMatch(/no corner to spare/);
+  });
+
+  it("moves one vertex of a polygon and writes geometry alone", async () => {
+    select(
+      "polygon",
+      pathGeometry([
+        [0.2, 0.2],
+        [0.6, 0.2],
+        [0.6, 0.6],
+      ]),
+    );
+
+    useAnnotationStore.getState().beginDrag();
+    useAnnotationStore.getState().moveVertexTo(1, [800, 150], FRAME);
+
+    const moved = useAnnotationStore.getState().annotations[0];
+    expect(moved.kind).toBe("polygon");
+    expect(absolutePoints(moved.geometry)[1][0]).toBeCloseTo(0.8);
+    expect(absolutePoints(moved.geometry)[0][0]).toBeCloseTo(0.2);
+
+    await useAnnotationStore.getState().commitGeometry();
+    // The corner count did not change, so the kind is not rewritten.
+    expect(updateAnnotationGeometry).toHaveBeenCalledTimes(1);
+    expect(updateAnnotationShape).not.toHaveBeenCalled();
+  });
+
+  it("ignores a vertex drag on a rectangle, whose corners resize", () => {
+    select("rect", { x: 0.2, y: 0.2, w: 0.4, h: 0.2, rotation: 0 });
+    const before = useAnnotationStore.getState().annotations[0].geometry;
+
+    useAnnotationStore.getState().beginDrag();
+    useAnnotationStore.getState().moveVertexTo(0, [500, 500], FRAME);
+
+    expect(useAnnotationStore.getState().annotations[0].geometry).toEqual(before);
   });
 });

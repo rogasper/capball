@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import {
+  boxCenterPx,
   type HandleName,
   moveBy as moveGeometryBy,
+  normalizePoint,
   type Point,
   pathGeometry,
   type Rect,
   resizeBy as resizeGeometryBy,
   rotateTo as rotateGeometryTo,
+  rotatePoint,
   simplifyPath,
 } from "@/lib/annotate/geometry";
 import { sortByLayer } from "@/lib/annotate/primitives";
@@ -18,6 +21,7 @@ import {
   type ShapeKind,
   type WindowMode,
 } from "@/lib/annotate/types";
+import { edgeMidpoint, insertVertex, moveVertex, removeVertex } from "@/lib/annotate/vertices";
 import * as annotationsQuery from "@/lib/db/queries/annotations";
 
 /**
@@ -41,6 +45,8 @@ export const INITIAL_WINDOW_MS = 2_500;
 
 type Patch = {
   geometry?: Geometry;
+  /** Only a reshape changes this: a rectangle minus a corner is a polygon. */
+  kind?: ShapeKind;
   style?: AnnotationStyle;
   windowMode?: WindowMode;
   windowMs?: number;
@@ -100,6 +106,10 @@ type AnnotationState = {
   moveSelected: (delta: Point) => void;
   resizeSelected: (handle: HandleName, toPx: Point, rect: Rect) => void;
   rotateSelected: (toPx: Point, rect: Rect) => void;
+  /** Reshaping (FR-20.11): one vertex, or the shape's corner count. */
+  moveVertexTo: (index: number, toPx: Point, rect: Rect) => void;
+  insertVertexAfter: (index: number) => Promise<void>;
+  removeVertexAt: (index: number) => Promise<void>;
   commitGeometry: () => Promise<void>;
 
   setLabel: (id: number, label: string) => Promise<void>;
@@ -350,6 +360,88 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
       applyPatch(current.id, { geometry: rotateGeometryTo(current.geometry, toPx, rect) });
     },
 
+    /**
+     * Drags one vertex of a polygon, line or arrow.
+     *
+     * The pointer arrives in the rotated space the user sees, so it is turned
+     * back about the box centre before it is stored — without that, dragging a
+     * corner of a rotated zone would move the vertex somewhere else.
+     */
+    moveVertexTo(index, toPx, rect) {
+      const { selectedId, annotations } = get();
+      const current = annotations.find((annotation) => annotation.id === selectedId);
+      if (!current) return;
+
+      const centre = boxCenterPx(current.geometry, rect);
+      const local = rotatePoint(toPx, centre, -current.geometry.rotation);
+      const to = normalizePoint(rect, local[0], local[1]);
+      const edit = moveVertex(current, index, to);
+      if (edit) applyPatch(current.id, { geometry: edit.geometry });
+    },
+
+    /**
+     * Adds a corner on the edge that starts at `index`.
+     *
+     * The whole shape is replaced in one command and one write, because the
+     * corner count changes what the shape *is*: a rectangle becomes a polygon
+     * (FR-20.11), and an undo has to restore the kind as well as the geometry.
+     */
+    async insertVertexAfter(index) {
+      const { selectedId, annotations } = get();
+      const current = annotations.find((annotation) => annotation.id === selectedId);
+      if (!current) return;
+
+      const at = edgeMidpoint(current, index);
+      const edit = at ? insertVertex(current, index, at) : null;
+      if (!edit) {
+        set({ error: "This shape cannot take another corner." });
+        return;
+      }
+
+      applyPatch(current.id, edit);
+      pushCommand({
+        kind: "patch",
+        id: current.id,
+        before: { kind: current.kind, geometry: current.geometry },
+        after: { kind: edit.kind, geometry: edit.geometry },
+      });
+
+      try {
+        await annotationsQuery.updateAnnotationShape(current.id, edit.kind, edit.geometry);
+      } catch (error) {
+        applyPatch(current.id, { kind: current.kind, geometry: current.geometry });
+        set({ error: messageOf(error) });
+      }
+    },
+
+    /** Removes a corner, closing the outline over the rest. */
+    async removeVertexAt(index) {
+      const { selectedId, annotations } = get();
+      const current = annotations.find((annotation) => annotation.id === selectedId);
+      if (!current) return;
+
+      const edit = removeVertex(current, index);
+      if (!edit) {
+        set({ error: "This shape has no corner to spare — a line needs both its ends." });
+        return;
+      }
+
+      applyPatch(current.id, edit);
+      pushCommand({
+        kind: "patch",
+        id: current.id,
+        before: { kind: current.kind, geometry: current.geometry },
+        after: { kind: edit.kind, geometry: edit.geometry },
+      });
+
+      try {
+        await annotationsQuery.updateAnnotationShape(current.id, edit.kind, edit.geometry);
+      } catch (error) {
+        applyPatch(current.id, { kind: current.kind, geometry: current.geometry });
+        set({ error: messageOf(error) });
+      }
+    },
+
     /** Persists the geometry a drag produced, as one command and one write. */
     async commitGeometry() {
       const { selectedId, annotations, dragOrigin } = get();
@@ -514,7 +606,13 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
 });
 
 async function writePatch(id: number, patch: Patch): Promise<void> {
-  if (patch.geometry) await annotationsQuery.updateAnnotationGeometry(id, patch.geometry);
+  // A reshape writes kind and geometry in one statement: two would leave the row
+  // briefly inconsistent if the second failed (see `updateAnnotationShape`).
+  if (patch.kind !== undefined && patch.geometry) {
+    await annotationsQuery.updateAnnotationShape(id, patch.kind, patch.geometry);
+  } else if (patch.geometry) {
+    await annotationsQuery.updateAnnotationGeometry(id, patch.geometry);
+  }
   if (patch.style) await annotationsQuery.updateAnnotationStyle(id, patch.style);
   if (patch.windowMode !== undefined && patch.windowMs !== undefined) {
     await annotationsQuery.updateAnnotationWindow(id, patch.windowMode, patch.windowMs);

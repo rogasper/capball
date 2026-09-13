@@ -34,8 +34,9 @@ function recorder(): { ctx: Canvas2D; ops: Op[] } {
     lineTo: (x, y) => ops.push(["lineTo", x, y]),
     quadraticCurveTo: (cx, cy, x, y) => ops.push(["quadraticCurveTo", cx, cy, x, y]),
     closePath: () => ops.push(["closePath"]),
+    clip: () => ops.push(["clip"]),
     fill: () => ops.push(["fill", ctx.fillStyle]),
-    stroke: () => ops.push(["stroke"]),
+    stroke: () => ops.push(["stroke", ctx.strokeStyle]),
     fillRect: (x, y, w, h) => ops.push(["fillRect", x, y, w, h]),
     strokeRect: (x, y, w, h) => ops.push(["strokeRect", x, y, w, h]),
     ellipse: (cx, cy, rx, ry, rotation, start, end) =>
@@ -228,5 +229,72 @@ describe("renderPrimitives", () => {
     const { ctx, ops } = recorder();
     renderPrimitives([toPrimitive(annotation("rect"))], ctx, 0, 0);
     expect(ops).toHaveLength(0);
+  });
+});
+
+describe("patterned fills (FR-20.12)", () => {
+  function patterned(pattern: "hatch" | "crossHatch", patch: Partial<Annotation> = {}): Annotation {
+    return annotation("rect", {
+      geometry: boxGeometry([0.1, 0.1], [0.3, 0.3]),
+      // Angle zero here so the expected geometry is arithmetic rather than
+      // trigonometry; the default style's diagonal is covered in the pattern test.
+      style: { ...DEFAULT_STYLE, fill: "#112233", fillPattern: pattern, patternAngle: 0 },
+      ...patch,
+    });
+  }
+
+  it("clips the hatch to the shape and strokes it in the fill's colour", () => {
+    const ops = draw(patterned("hatch"));
+
+    expect(opsNamed(ops, "clip")).toHaveLength(1);
+    // The pattern replaces the solid fill rather than covering it.
+    expect(opsNamed(ops, "fillRect")).toHaveLength(0);
+    // Still outlined, exactly once.
+    expect(opsNamed(ops, "strokeRect")).toHaveLength(1);
+
+    // Every hatch line is one path stroked once, and it uses the fill colour.
+    const strokes = opsNamed(ops, "stroke");
+    expect(strokes).toHaveLength(1);
+    expect(strokes[0][1]).toBe("#112233");
+
+    // The first line sits one half-spacing below the box's top edge, spanning
+    // its width: 0.02 of a 1000 px frame is 20 px, and the box starts at 100.
+    const moves = opsNamed(ops, "moveTo");
+    expect(moves[1]).toEqual(["moveTo", 100, 110]);
+    const lines = opsNamed(ops, "lineTo");
+    expect(lines[3]).toEqual(["lineTo", 300, 110]);
+  });
+
+  it("draws cross-hatch in both directions", () => {
+    const hatch = opsNamed(draw(patterned("hatch")), "lineTo").length;
+    const crossed = opsNamed(draw(patterned("crossHatch")), "lineTo").length;
+    expect(crossed).toBeGreaterThan(hatch);
+  });
+
+  it("keeps a solid fill solid and an unfilled shape unfilled", () => {
+    const solid = draw(annotation("rect", { style: { ...DEFAULT_STYLE, fill: "#112233" } }));
+    expect(opsNamed(solid, "clip")).toHaveLength(0);
+    expect(opsNamed(solid, "fillRect")).toHaveLength(1);
+
+    // `fill: null` is an outline-only shape: no pattern, no clip, no fill.
+    expect(
+      opsNamed(
+        draw(patterned("hatch", { style: { ...DEFAULT_STYLE, fill: null, fillPattern: "hatch" } })),
+        "clip",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("leaves an open stroke alone even if its style says patterned", () => {
+    const ops = draw(
+      annotation("freehand", {
+        geometry: pathGeometry([
+          [0.2, 0.2],
+          [0.4, 0.4],
+        ]),
+        style: { ...DEFAULT_STYLE, fill: "#112233", fillPattern: "hatch" },
+      }),
+    );
+    expect(opsNamed(ops, "clip")).toHaveLength(0);
   });
 });

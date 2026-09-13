@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { pathGeometry, simplifyPath } from "@/lib/annotate/geometry";
-import { toPrimitives } from "@/lib/annotate/primitives";
+import { toPrimitive, toPrimitives } from "@/lib/annotate/primitives";
 import { type Annotation, DEFAULT_STYLE, type ShapeKind } from "@/lib/annotate/types";
 import type { WindowContext } from "@/lib/annotate/window";
 import { renderPrimitives } from "@/lib/render/canvas";
+import { patternSegments } from "@/lib/render/pattern";
 
 /**
  * The canvas repaint budget (T6, NFR-21).
@@ -115,5 +116,56 @@ describe("the repaint budget at 100 shapes", () => {
     // their geometry cannot be a handful — but it must not be unbounded either.
     expect(context.operations).toBeGreaterThan(100);
     expect(context.operations).toBeLessThan(50_000);
+  });
+});
+
+describe("the cost of a hatched zone (T11, FR-20.12, NFR-40)", () => {
+  /** The picture area of a full-frame zone at 1920×1080, which is the worst case. */
+  const FULL_FRAME = { x: 38, y: 22, w: 1_843, h: 1_037 };
+
+  function hatchedZone(pattern: "hatch" | "crossHatch", scale: number): Annotation {
+    return {
+      id: 1,
+      uid: "u1",
+      eventId: 1,
+      kind: "rect",
+      // Visible for the whole event, so the pattern is always on screen.
+      windowMode: "event",
+      windowMs: 2_500,
+      geometry: { x: 0.02, y: 0.02, w: 0.96, h: 0.96, rotation: 0 },
+      style: { ...DEFAULT_STYLE, fill: "#4C8DFF33", fillPattern: pattern, patternScale: scale },
+      label: null,
+      z: 0,
+    };
+  }
+
+  it("generates a full-frame pattern well inside a frame, and reports the figure", () => {
+    const runs = 200;
+    // Warm up, so the first-call cost is not the number recorded.
+    patternSegments(FULL_FRAME, 19.2, -Math.PI / 4, "hatch");
+
+    const started = performance.now();
+    let segments = 0;
+    for (let i = 0; i < runs; i++) {
+      segments = patternSegments(FULL_FRAME, 19.2, -Math.PI / 4, "hatch").length;
+    }
+    const perRunMs = (performance.now() - started) / runs;
+
+    console.log(
+      `T11: a full-frame hatch at the finest UI spacing → ${segments} lines in ${perRunMs.toFixed(3)} ms`,
+    );
+    expect(perRunMs).toBeLessThan(4);
+    // The measurement found 111 lines; this bound is the guarantee, not the figure.
+    expect(segments).toBeLessThan(200);
+  });
+
+  it("keeps the smallest spacing inside the line cap", () => {
+    // 0.002 of 1920 px is under 4 px apart, which the UI does not offer but a
+    // stored style may still hold: the cap has to hold anyway.
+    const context = recordingContext();
+    renderPrimitives([toPrimitive(hatchedZone("crossHatch", 0.002))], context, 1920, 1080);
+
+    console.log(`T11: the worst-case cross-hatch → ${context.operations} canvas operations`);
+    expect(context.operations).toBeLessThan(3_000);
   });
 });

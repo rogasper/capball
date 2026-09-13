@@ -7,14 +7,17 @@ import {
   handlesFor,
   hitTest,
   MIN_SIZE,
+  midpointIndexOf,
   normalizePoint,
   type Point,
   pathGeometry,
   type Rect,
   twoPointGeometry,
+  vertexIndexOf,
 } from "@/lib/annotate/geometry";
 import { toPrimitive, toPrimitives } from "@/lib/annotate/primitives";
 import type { Annotation, ShapeKind } from "@/lib/annotate/types";
+import { vertexCount } from "@/lib/annotate/vertices";
 import { resolveWindow, type WindowContext } from "@/lib/annotate/window";
 import { playback } from "@/lib/playback";
 import { type Canvas2D, renderPrimitives } from "@/lib/render/canvas";
@@ -38,22 +41,43 @@ const HANDLE_HIT_PX = 11;
 /** A drag shorter than this is a click, not a shape. */
 const MIN_DRAG_PX = 4;
 const HANDLE_SIZE_PX = 9;
+/** Add-a-corner grips are smaller and hollow, so they read as secondary. */
+const ADD_HANDLE_SIZE_PX = 6;
 /** Freehand points closer together than this are not worth keeping. */
 const FREEHAND_STEP = 0.0015;
 
-export const HANDLE_LABELS: Record<HandleName, string> = {
-  nw: "Resize from top left",
-  ne: "Resize from top right",
-  se: "Resize from bottom right",
-  sw: "Resize from bottom left",
+/**
+ * A rectangle's resize corners double as its vertices, in the order
+ * `shapeVertices` and `boxCornersPx` both use — which is what lets the same
+ * grip be dragged (resize) and removed (the corner disappears).
+ */
+const RECT_CORNER_INDEX: Partial<Record<HandleName, number>> = { nw: 0, ne: 1, se: 2, sw: 3 };
+
+const FIXED_HANDLE_LABELS: Record<string, string> = {
+  nw: "Resize from top left — Delete removes this corner",
+  ne: "Resize from top right — Delete removes this corner",
+  se: "Resize from bottom right — Delete removes this corner",
+  sw: "Resize from bottom left — Delete removes this corner",
   p0: "Move start point",
   p1: "Move end point",
   rotate: "Rotate",
 };
 
+function handleLabel(name: HandleName, annotation: Annotation | undefined): string {
+  const vertex = vertexIndexOf(name);
+  if (vertex !== null) {
+    const total = annotation ? vertexCount(annotation) : 0;
+    return `Corner ${vertex + 1} of ${total} — drag to move, Delete to remove`;
+  }
+  if (midpointIndexOf(name) !== null) return "Add a corner on this edge";
+  return FIXED_HANDLE_LABELS[name] ?? "Handle";
+}
+
 type Drag =
   | { mode: "move"; last: Point }
   | { mode: "resize"; handle: HandleName }
+  /** One vertex of a polygon, line or arrow (FR-20.11). */
+  | { mode: "vertex"; index: number }
   | { mode: "rotate" }
   | { mode: "shape"; start: Point; startPx: Point; kind: ShapeKind }
   | { mode: "freehand" };
@@ -85,6 +109,7 @@ export function AnnotationCanvas({
   const events = useEventStore((state) => state.events);
 
   const selectedEvent = events.find((event) => event.id === eventId) ?? null;
+  const selected = annotations.find((annotation) => annotation.id === selectedId);
 
   /** Everything a time window needs, read at the moment of drawing. */
   const windowContext = useCallback(
@@ -233,13 +258,22 @@ export function AnnotationCanvas({
     const selected = annotations.find((annotation) => annotation.id === selectedId);
 
     if (selected) {
-      const grip = handlesFor(selected, frame).find(
-        (handle) => Math.hypot(handle.point[0] - px[0], handle.point[1] - px[1]) <= HANDLE_HIT_PX,
-      );
+      // The add-a-corner grips are clicks, not drags, so they are not part of
+      // the drag search; a press near one falls through to the shape under it.
+      const grip = handlesFor(selected, frame)
+        .filter((handle) => midpointIndexOf(handle.name) === null)
+        .find(
+          (handle) => Math.hypot(handle.point[0] - px[0], handle.point[1] - px[1]) <= HANDLE_HIT_PX,
+        );
       if (grip) {
+        const vertex = vertexIndexOf(grip.name);
         store.beginDrag();
         dragRef.current =
-          grip.name === "rotate" ? { mode: "rotate" } : { mode: "resize", handle: grip.name };
+          vertex !== null
+            ? { mode: "vertex", index: vertex }
+            : grip.name === "rotate"
+              ? { mode: "rotate" }
+              : { mode: "resize", handle: grip.name };
         return;
       }
     }
@@ -288,6 +322,9 @@ export function AnnotationCanvas({
         break;
       case "resize":
         store.resizeSelected(drag.handle, px, frame);
+        break;
+      case "vertex":
+        store.moveVertexTo(drag.index, px, frame);
         break;
       case "rotate":
         store.rotateSelected(px, frame);
@@ -352,11 +389,41 @@ export function AnnotationCanvas({
   /** A handle press captures the pointer on the canvas, which owns the drag. */
   const onHandleDown = (handle: Handle) => (event: React.PointerEvent<HTMLButtonElement>) => {
     event.stopPropagation();
+    // Add-a-corner grips are clicks; leaving pointerdown unhandled keeps them
+    // from starting a drag that would move the shape instead of editing it.
+    if (midpointIndexOf(handle.name) !== null) return;
+
+    const vertex = vertexIndexOf(handle.name);
     const store = useAnnotationStore.getState();
     store.beginDrag();
     dragRef.current =
-      handle.name === "rotate" ? { mode: "rotate" } : { mode: "resize", handle: handle.name };
+      vertex !== null
+        ? { mode: "vertex", index: vertex }
+        : handle.name === "rotate"
+          ? { mode: "rotate" }
+          : { mode: "resize", handle: handle.name };
     canvasRef.current?.setPointerCapture(event.pointerId);
+  };
+
+  /** The vertex a grip would remove, if that grip is removable at all. */
+  const removableVertex = (name: HandleName, annotation: Annotation | undefined): number | null => {
+    const vertex = vertexIndexOf(name);
+    if (vertex !== null) return vertex;
+    const corner = RECT_CORNER_INDEX[name];
+    if (corner !== undefined && annotation?.kind === "rect") return corner;
+    return null;
+  };
+
+  const onRemoveVertex = (index: number) => (event: React.SyntheticEvent) => {
+    // A focused corner owns Delete: without stopping the event, the window's
+    // shortcut would delete the whole shape instead of one of its corners.
+    event.preventDefault();
+    event.stopPropagation();
+    void useAnnotationStore.getState().removeVertexAt(index);
+  };
+
+  const onVertexKeyDown = (index: number) => (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "Delete" || event.key === "Backspace") onRemoveVertex(index)(event);
   };
 
   if (!playbackUrl || !selectedEvent) return null;
@@ -384,21 +451,43 @@ export function AnnotationCanvas({
 
       {interactive && tool === null && handles.length > 0 && (
         <div className="pointer-events-none absolute" style={{ left: rect.x, top: rect.y }}>
-          {handles.map((handle) => (
-            <button
-              key={handle.name}
-              type="button"
-              aria-label={HANDLE_LABELS[handle.name]}
-              className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-primary shadow"
-              style={{
-                left: handle.point[0],
-                top: handle.point[1],
-                width: HANDLE_SIZE_PX,
-                height: HANDLE_SIZE_PX,
-              }}
-              onPointerDown={onHandleDown(handle)}
-            />
-          ))}
+          {handles.map((handle) => {
+            const addIndex = midpointIndexOf(handle.name);
+            const removeIndex = removableVertex(handle.name, selected);
+            const label = handleLabel(handle.name, selected);
+            const size = addIndex !== null ? ADD_HANDLE_SIZE_PX : HANDLE_SIZE_PX;
+
+            return (
+              <button
+                key={handle.name}
+                type="button"
+                aria-label={label}
+                title={label}
+                className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded-full border ${
+                  addIndex !== null
+                    ? "border-dashed border-primary/70 bg-background"
+                    : "border-white bg-primary"
+                }`}
+                style={{
+                  left: handle.point[0],
+                  top: handle.point[1],
+                  width: size,
+                  height: size,
+                }}
+                onPointerDown={onHandleDown(handle)}
+                onClick={
+                  addIndex === null
+                    ? undefined
+                    : (event) => {
+                        event.stopPropagation();
+                        void useAnnotationStore.getState().insertVertexAfter(addIndex);
+                      }
+                }
+                onDoubleClick={removeIndex === null ? undefined : onRemoveVertex(removeIndex)}
+                onKeyDown={removeIndex === null ? undefined : onVertexKeyDown(removeIndex)}
+              />
+            );
+          })}
         </div>
       )}
     </>

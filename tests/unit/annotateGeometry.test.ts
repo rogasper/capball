@@ -264,10 +264,38 @@ describe("hit tests", () => {
 });
 
 describe("handles", () => {
-  it("gives a rectangle four corners and a rotate grip", () => {
+  it("gives a rectangle four resize corners, an add grip per edge, and a rotate grip", () => {
     const names = handlesFor(annotation("rect", boxGeometry([0.2, 0.2], [0.6, 0.6])), square).map(
       (handle) => handle.name,
     );
+    // R2 (FR-20.11): the corners stay a resize, and the midpoints are how a
+    // rectangle gains a corner — or, with one removed, becomes a triangle.
+    expect(names).toEqual(["nw", "ne", "se", "sw", "m0", "m1", "m2", "m3", "rotate"]);
+  });
+
+  it("gives a polygon one handle per vertex, an add grip per edge, and no box resize", () => {
+    const names = handlesFor(
+      annotation(
+        "polygon",
+        pathGeometry([
+          [0.2, 0.2],
+          [0.6, 0.2],
+          [0.6, 0.6],
+        ]),
+      ),
+      square,
+    ).map((handle) => handle.name);
+
+    // A polygon's corners are what it is, so there is no second set of grips
+    // scaling its bounding box — but its edges can still gain a corner.
+    expect(names).toEqual(["v0", "v1", "v2", "m0", "m1", "m2", "rotate"]);
+  });
+
+  it("gives an ellipse its box corners and no vertex handles", () => {
+    const names = handlesFor(
+      annotation("ellipse", boxGeometry([0.2, 0.2], [0.6, 0.6])),
+      square,
+    ).map((handle) => handle.name);
     expect(names).toEqual(["nw", "ne", "se", "sw", "rotate"]);
   });
 

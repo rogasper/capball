@@ -47,6 +47,11 @@ describe("decodeSettings", () => {
         width: 0.005,
         fontSize: 0.05,
         opacity: 0.8,
+        // A style stored before R2 carries no pattern fields, and this is the
+        // guarantee that it still renders exactly as it did (FR-20.12).
+        fillPattern: "solid",
+        patternScale: 0.02,
+        patternAngle: -Math.PI / 4,
       },
     });
   });

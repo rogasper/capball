@@ -1,4 +1,4 @@
-import type { Annotation, Geometry } from "./types";
+import type { Annotation, Geometry, ShapeKind } from "./types";
 
 /**
  * Pure geometry for annotations.
@@ -149,7 +149,59 @@ export function boxCornersPx(geometry: Geometry, rect: Rect): Point[] {
   ).map((corner) => rotatePoint(corner, centre, geometry.rotation));
 }
 
-export type HandleName = "nw" | "ne" | "se" | "sw" | "p0" | "p1" | "rotate";
+/**
+ * A shape's vertices in order, in **normalised frame coordinates**.
+ *
+ * A rectangle reports its four corners — in the same order as `boxCornersPx` —
+ * because a rectangle stores no `points`: the box *is* the shape. The editable
+ * kinds share this one definition so the handle layer, the reshape operations
+ * and the store cannot disagree about which corner is "vertex 2" (FR-20.11).
+ */
+export function shapeVertices(geometry: Geometry, kind: ShapeKind): Point[] {
+  if (kind === "rect") {
+    return [
+      [geometry.x, geometry.y],
+      [geometry.x + geometry.w, geometry.y],
+      [geometry.x + geometry.w, geometry.y + geometry.h],
+      [geometry.x, geometry.y + geometry.h],
+    ];
+  }
+  if (kind === "polygon" || kind === "line" || kind === "arrow") return absolutePoints(geometry);
+  return [];
+}
+
+/**
+ * A grab point's name.
+ *
+ * `v{n}` is a vertex of a shape that is reshaped point by point, and `m{n}` is
+ * the add-vertex handle on the edge that starts at vertex `n` (R2, FR-20.11).
+ * The numeric forms are unbounded because a polygon's vertex count is.
+ */
+export type HandleName =
+  | "nw"
+  | "ne"
+  | "se"
+  | "sw"
+  | "p0"
+  | "p1"
+  | "rotate"
+  | `v${number}`
+  | `m${number}`;
+
+export const VERTEX_HANDLE = /^v(\d+)$/;
+export const MIDPOINT_HANDLE = /^m(\d+)$/;
+
+/** The vertex index a handle refers to, or null if it is not a vertex handle. */
+export function vertexIndexOf(handle: HandleName): number | null {
+  const match = VERTEX_HANDLE.exec(handle);
+  return match ? Number(match[1]) : null;
+}
+
+/** The edge index an add-vertex handle refers to, or null. */
+export function midpointIndexOf(handle: HandleName): number | null {
+  const match = MIDPOINT_HANDLE.exec(handle);
+  return match ? Number(match[1]) : null;
+}
 
 export type Handle = { name: HandleName; point: Point };
 
@@ -161,33 +213,65 @@ const ROTATE_HANDLE_OFFSET_PX = 26;
  * Lines and arrows get their endpoints, because dragging an endpoint is what a
  * user means by resizing a line. Text gets only the rotate handle, since its
  * size is a style (FR-20.5) rather than a box.
+ *
+ * Reshaping (R2, FR-20.11) adds two kinds of grip:
+ *
+ * - A **polygon** is edited by its vertices, so it gets one handle per vertex
+ *   and no box resize: its corners are what it *is*, and a second set of grips
+ *   that scaled the bounding box would sit confusingly near them.
+ * - A **rectangle** keeps R1's four resize corners and gains a midpoint handle
+ *   on each edge. Adding or removing a corner turns it into a polygon, which is
+ *   how a rectangle becomes the triangle in front of the analyst.
+ *
+ * Ellipse, freehand and text remain transform-only: their vertices are either
+ * parameters (radii) or an artefact of simplification, not a design.
  */
 export function handlesFor(annotation: Annotation, rect: Rect): Handle[] {
   const { geometry, kind } = annotation;
+  const rotate: Handle = { name: "rotate", point: rotateHandle(geometry, rect) };
 
-  if (annotation.kind === "line" || kind === "arrow") {
+  if (kind === "line" || kind === "arrow") {
     const points = absolutePointsPx(geometry, rect);
     if (points.length === 2) {
-      return [
-        { name: "p0", point: points[0] },
-        { name: "p1", point: points[1] },
-        { name: "rotate", point: rotateHandle(geometry, rect) },
-      ];
+      return [{ name: "p0", point: points[0] }, { name: "p1", point: points[1] }, rotate];
     }
   }
 
-  const corners = boxCornersPx(geometry, rect);
-  const resize: Handle[] =
-    kind === "text"
-      ? []
-      : ([
-          { name: "nw", point: corners[0] },
-          { name: "ne", point: corners[1] },
-          { name: "se", point: corners[2] },
-          { name: "sw", point: corners[3] },
-        ] as Handle[]);
+  if (kind === "text") return [rotate];
 
-  return [...resize, { name: "rotate", point: rotateHandle(geometry, rect) }];
+  /**
+   * The add grips sit on the edges, in the same order as `shapeVertices`, so
+   * edge `i` is the one from vertex `i` to vertex `i + 1` — which is what makes
+   * a click on one insert the corner exactly where the user aimed.
+   */
+  const edgeGrips = (vertices: Point[]): Handle[] =>
+    vertices.map((vertex, index): Handle => {
+      const next = vertices[(index + 1) % vertices.length];
+      return { name: `m${index}`, point: [(vertex[0] + next[0]) / 2, (vertex[1] + next[1]) / 2] };
+    });
+
+  if (kind === "polygon") {
+    // A polygon is edited by its vertices: one grip each, plus one per edge to
+    // add another. No bounding-box resize, because its corners are what it is.
+    const vertices = absolutePointsPx(geometry, rect);
+    return [
+      ...vertices.map((point, index): Handle => ({ name: `v${index}`, point })),
+      ...edgeGrips(vertices),
+      rotate,
+    ];
+  }
+
+  // A rectangle keeps R1's four resize corners; an ellipse keeps them and gains
+  // no add grips, since its corners are not vertices (FR-20.11).
+  const corners = boxCornersPx(geometry, rect);
+  const resize: Handle[] = [
+    { name: "nw", point: corners[0] },
+    { name: "ne", point: corners[1] },
+    { name: "se", point: corners[2] },
+    { name: "sw", point: corners[3] },
+  ];
+
+  return [...resize, ...(kind === "rect" ? edgeGrips(corners) : []), rotate];
 }
 
 function rotateHandle(geometry: Geometry, rect: Rect): Point {

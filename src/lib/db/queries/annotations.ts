@@ -2,10 +2,10 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import {
   type Annotation,
   type AnnotationStyle,
-  DEFAULT_STYLE,
   type Geometry,
   isShapeKind,
   isWindowMode,
+  normaliseStyle,
 } from "@/lib/annotate/types";
 import { db } from "@/lib/db/client";
 import { annotations } from "@/lib/db/schema";
@@ -63,10 +63,9 @@ function toAnnotation(row: typeof annotations.$inferSelect): Annotation {
     windowMode: isWindowMode(row.windowMode) ? row.windowMode : "moment",
     windowMs: row.windowMs,
     geometry: decodeJson<Geometry>(row.id, "geometry", row.geometryJson),
-    style: {
-      ...DEFAULT_STYLE,
-      ...decodeJson<Partial<AnnotationStyle>>(row.id, "style", row.styleJson),
-    },
+    // R1 rows carry no pattern fields, and `normaliseStyle` is what makes them
+    // render as solid: a merged default rather than an undefined pattern.
+    style: normaliseStyle(decodeJson<Partial<AnnotationStyle>>(row.id, "style", row.styleJson)),
     label: row.label,
     z: row.z,
   };
@@ -110,6 +109,21 @@ async function update(id: number, patch: Partial<typeof annotations.$inferInsert
 
 export async function updateAnnotationGeometry(id: number, geometry: Geometry): Promise<void> {
   await update(id, { geometryJson: JSON.stringify(geometry) });
+}
+
+/**
+ * Writes a shape's kind and geometry together.
+ *
+ * Reshaping changes both at once — a rectangle minus a corner is a polygon — and
+ * splitting that across two statements would leave a row that is briefly a
+ * polygon with a rectangle's points, or the reverse, if the second one failed.
+ */
+export async function updateAnnotationShape(
+  id: number,
+  kind: string,
+  geometry: Geometry,
+): Promise<void> {
+  await update(id, { kind, geometryJson: JSON.stringify(geometry) });
 }
 
 export async function updateAnnotationStyle(id: number, style: AnnotationStyle): Promise<void> {

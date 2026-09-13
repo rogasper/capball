@@ -1,5 +1,5 @@
 import { absolutePoints, type Point } from "./geometry";
-import type { Annotation } from "./types";
+import type { Annotation, FillPattern } from "./types";
 import { isVisibleAt, type WindowContext } from "./window";
 
 /**
@@ -18,6 +18,12 @@ type PrimitiveBase = {
   fill: string | null;
   /** Stroke width as a fraction of the frame's width. */
   width: number;
+  /** How the fill is painted (FR-20.12). `solid` is R1's behaviour. */
+  fillPattern: FillPattern;
+  /** Hatch spacing as a fraction of the picture width. */
+  patternScale: number;
+  /** Hatch angle in radians. */
+  patternAngle: number;
   /** Rotation origin, in normalised frame coordinates. */
   center: Point;
   rotation: number;
@@ -54,6 +60,9 @@ function base(annotation: Annotation): PrimitiveBase {
     stroke: style.stroke,
     fill: style.fill,
     width: style.width,
+    fillPattern: style.fillPattern,
+    patternScale: style.patternScale,
+    patternAngle: style.patternAngle,
     center: [geometry.x + geometry.w / 2, geometry.y + geometry.h / 2],
     rotation: geometry.rotation,
     annotationId: annotation.id,
