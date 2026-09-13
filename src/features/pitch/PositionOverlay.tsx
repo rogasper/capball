@@ -1,12 +1,14 @@
-import { type RefObject, useCallback, useMemo, useRef } from "react";
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useContentRect } from "@/features/player/useContentRect";
-import { derivePosition, homographyOf, regionOf } from "@/lib/pitch/positions";
+import { placeOnPitch } from "@/lib/pitch/place";
+import { isPositionVisibleAt } from "@/lib/pitch/positions";
+import { playback } from "@/lib/playback";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { activeCalibrationAt, useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePositionStore } from "@/stores/positionStore";
-import { markerOffsets } from "./markers";
+import { markerOffsets, normaliseFromBox } from "./markers";
 
 /**
  * Marking player positions on the frame (FR-30.3, FR-30.4).
@@ -21,6 +23,12 @@ import { markerOffsets } from "./markers";
  * Markers sit where the click landed, not where the pitch coordinate projects
  * back: the click is the provenance, and a later calibration change must not
  * appear to move a position the user placed (FR-30.2).
+ *
+ * They are shown while the playhead is inside the event's own range and hidden
+ * outside it, because the click only tells the truth at that moment. The rule is
+ * read through `playback.onFrame` — which fires on seek and on load as well as
+ * during playback — and only touches state when the answer flips, so nothing here
+ * re-renders per frame.
  */
 
 export function PositionOverlay({
@@ -52,16 +60,34 @@ export function PositionOverlay({
   const event = events.find((candidate) => candidate.id === eventId) ?? null;
   const calibration = event ? activeCalibrationAt(calibrations, event.anchorMs) : null;
 
+  // The event's own range is the display window. Seeded from the controller
+  // directly, because a selection that does not move the playhead emits no frame
+  // — and re-seeded whenever the range or the marking mode changes.
+  const range = useMemo(
+    () => (event ? { startMs: event.startMs, endMs: event.endMs } : null),
+    [event],
+  );
+  const [visible, setVisible] = useState(() =>
+    isPositionVisibleAt(playback.timeMs, range, marking),
+  );
+
+  useEffect(() => {
+    const decide = (atMs: number) => isPositionVisibleAt(atMs, range, marking);
+    setVisible(decide(playback.timeMs));
+    return playback.onFrame((atMs) =>
+      setVisible((current) => {
+        const next = decide(atMs);
+        return current === next ? current : next;
+      }),
+    );
+  }, [range, marking]);
+
   const onPointerDown = useCallback(
     async (pointerEvent: React.PointerEvent<HTMLCanvasElement>) => {
       if (!marking || !target) return;
 
       const store = usePositionStore.getState();
 
-      if (!calibration || calibration.points.length < 4) {
-        store.reportError("This video is not calibrated yet, so a click has no pitch position.");
-        return;
-      }
       if (frame.width <= 0 || frame.height <= 0) {
         store.reportError("The video's size is not known yet. Try again in a moment.");
         return;
@@ -70,26 +96,20 @@ export function PositionOverlay({
       // Read synchronously: a pointer event cannot be consulted later (see the
       // timeline fix — a state updater runs after dispatch has cleared it). The
       // surface is sized to the picture rect, so its own box is the frame.
-      const box = pointerEvent.currentTarget.getBoundingClientRect();
-      if (box.width <= 0 || box.height <= 0) return;
-      const imageU = (pointerEvent.clientX - box.left) / box.width;
-      const imageV = (pointerEvent.clientY - box.top) / box.height;
-
-      const size = { lengthM: pitchLengthM, widthM: pitchWidthM };
-
-      const solved = homographyOf(calibration.points, frame);
-      if (!solved.ok) {
-        store.reportError(solved.reason);
-        return;
-      }
-
-      const verdict = derivePosition(
-        solved.h,
-        { imageU, imageV },
-        frame,
-        size,
-        regionOf(calibration.points, size),
+      const point = normaliseFromBox(
+        pointerEvent.currentTarget.getBoundingClientRect(),
+        pointerEvent.clientX,
+        pointerEvent.clientY,
       );
+      if (!point) return;
+      const [imageU, imageV] = point;
+
+      const verdict = placeOnPitch({
+        calibration,
+        click: { imageU, imageV },
+        frame,
+        size: { lengthM: pitchLengthM, widthM: pitchWidthM },
+      });
 
       if (!verdict.ok) {
         store.reportError(verdict.reason);
@@ -98,7 +118,7 @@ export function PositionOverlay({
 
       await store.place({
         uid: crypto.randomUUID(),
-        calibrationId: calibration.id,
+        calibrationId: calibration?.id ?? null,
         imageU,
         imageV,
         xM: verdict.xM,
@@ -109,7 +129,9 @@ export function PositionOverlay({
     [marking, target, calibration, frame, pitchLengthM, pitchWidthM],
   );
 
-  if (positions.length === 0 && !marking) return null;
+  // Outside the event's range there is nothing honest to draw: the player has
+  // moved. Marking keeps it visible, because placing a point needs its context.
+  if (!visible || (positions.length === 0 && !marking)) return null;
 
   return (
     <>
