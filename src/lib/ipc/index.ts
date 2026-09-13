@@ -87,15 +87,22 @@ export const ipc = {
     return invoke("cancel_job", { jobId });
   },
 
-  /** Cuts one clip to a destination the user chose. Refuses to overwrite. */
+  /**
+   * Cuts one clip to a destination the user chose. Refuses to overwrite.
+   *
+   * `overlays` are transparent PNGs composited by FFmpeg; when any are present
+   * the video stream re-encodes, because a filter cannot be combined with a
+   * stream copy.
+   */
   startExport(
     input: string,
     output: string,
     startMs: number,
     endMs: number,
     mode: ExportMode,
+    overlays: { path: string; enable: string }[] = [],
   ): Promise<MediaJob> {
-    return invoke("start_export", { input, output, startMs, endMs, mode });
+    return invoke("start_export", { input, output, startMs, endMs, mode, overlays });
   },
 
   /** Joins rendered clips into one file, in the order given. */
@@ -161,6 +168,23 @@ export const ipc = {
     return invoke("extract_thumbnail", { input, atMs });
   },
 
+  /**
+   * Renders one frame at **full resolution** as a PNG, for calibrating on a
+   * magnified picture. Keyed the same way, so reopening the picker is free.
+   */
+  extractFrame(input: string, atMs: number): Promise<string> {
+    return invoke("extract_frame", { input, atMs });
+  },
+
+  /**
+   * Writes a transparent overlay PNG (a base64 data URL) into the app cache and
+   * returns its path, for the burn-in export. Nothing derived from a video is
+   * ever written beside the footage.
+   */
+  writeOverlayPng(name: string, dataUrl: string): Promise<string> {
+    return invoke("write_overlay_png", { name, dataUrl });
+  },
+
   pickVideoFile(): Promise<string | null> {
     return open({
       multiple: false,
@@ -168,6 +192,18 @@ export const ipc = {
       title: "Choose a match video",
       filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
     }) as Promise<string | null>;
+  },
+
+  /**
+   * Drops derived files the library no longer needs: prepared playback copies,
+   * extracted frames and thumbnails whose source is gone, and export scratch
+   * older than the given age. Only derived data is ever touched.
+   */
+  pruneCache(
+    keepPaths: string[],
+    olderThanSeconds: number,
+  ): Promise<{ removedFiles: number; freedBytes: number }> {
+    return invoke("prune_cache", { keepPaths, olderThanSeconds });
   },
 
   /** A URL the WebView can load for a file registered above. */

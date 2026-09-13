@@ -2,6 +2,7 @@ import type { Primitive } from "@/lib/annotate/primitives";
 import type { AnnotationStyle } from "@/lib/annotate/types";
 import { applyHomography, invertHomography } from "./homography";
 import { type PitchSize, pitchOutline } from "./pitchModel";
+import { isSupported, type SupportedRegion } from "./positions";
 
 /**
  * The pitch drawn where it is in the video (FR-30.2).
@@ -12,6 +13,11 @@ import { type PitchSize, pitchOutline } from "./pitchModel";
  *
  * Circles become dense polylines in the pitch model, because a circle projects
  * to a general conic and our primitive set has no general conic.
+ *
+ * When a supported region is supplied, only the parts of the pitch that region
+ * constrains are drawn. Beyond it the projection is extrapolation, and drawing
+ * the extrapolation is what made a tight-shot calibration look like a broken
+ * pitch rather than an honest partial one (technical-design-R1 §6.3).
  */
 
 export type Frame = { width: number; height: number };
@@ -24,6 +30,8 @@ export type ProjectedOutline = {
   lines: [number, number][][];
   /** True when a line had to be broken because part of it left the frame. */
   clipped: boolean;
+  /** True when a line was broken because it left the region the picks support. */
+  regionClipped: boolean;
 };
 
 function isUsable(px: number, py: number, frame: Frame): boolean {
@@ -33,15 +41,31 @@ function isUsable(px: number, py: number, frame: Frame): boolean {
   return Math.abs(px) <= limitX && Math.abs(py) <= limitY;
 }
 
-export function projectOutline(h: number[], size: PitchSize, frame: Frame): ProjectedOutline {
+export function projectOutline(
+  h: number[],
+  size: PitchSize,
+  frame: Frame,
+  region: SupportedRegion | null = null,
+): ProjectedOutline {
   const inverse = invertHomography(h);
   const lines: [number, number][][] = [];
   let clipped = false;
+  let regionClipped = false;
 
   for (const line of pitchOutline(size)) {
     let run: [number, number][] = [];
 
     for (const [xM, yM] of line.points) {
+      // A run breaks where the projection runs away, and — when the picks only
+      // constrain part of the pitch — where the line leaves that part.
+      const supported = region === null || isSupported(region, [xM, yM]);
+      if (!supported) {
+        if (run.length > 1) lines.push(run);
+        run = [];
+        regionClipped = true;
+        continue;
+      }
+
       const { x: px, y: py } = applyHomography(inverse, xM, yM);
 
       if (!isUsable(px, py, frame)) {
@@ -57,7 +81,7 @@ export function projectOutline(h: number[], size: PitchSize, frame: Frame): Proj
     if (run.length > 1) lines.push(run);
   }
 
-  return { lines, clipped };
+  return { lines, clipped, regionClipped };
 }
 
 export type OutlineStyle = Pick<AnnotationStyle, "stroke" | "width" | "opacity">;
@@ -73,8 +97,9 @@ export function outlinePrimitives(
   size: PitchSize,
   frame: Frame,
   style: OutlineStyle,
+  region: SupportedRegion | null = null,
 ): Primitive[] {
-  const { lines } = projectOutline(h, size, frame);
+  const { lines } = projectOutline(h, size, frame, region);
 
   return lines.map((points) => ({
     kind: "path" as const,

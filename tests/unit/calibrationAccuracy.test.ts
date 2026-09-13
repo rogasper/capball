@@ -19,7 +19,6 @@ import type { Correspondence } from "@/lib/pitch/types";
  */
 
 const SIZE = { lengthM: 105, widthM: 68 };
-const FRAME = { width: 1920, height: 1080 };
 
 /** A plausible camera behind one goal: near touchline wide, far touchline narrow. */
 const VIEW_CORNERS: { pitch: [number, number]; px: number; py: number }[] = [
@@ -81,7 +80,7 @@ function measure(keys: string[], sigmaPx: number, seed: number) {
     };
   });
 
-  const solved = solveHomography(picks, FRAME);
+  const solved = solveHomography(picks);
   if (!solved.ok) throw new Error(solved.reason);
 
   // How far a position can be from the truth, across the whole pitch.

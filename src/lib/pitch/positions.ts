@@ -1,5 +1,5 @@
 import type { Point } from "@/lib/annotate/geometry";
-import { applyHomography, solveHomography } from "./homography";
+import { applyHomography, MIN_POINTS, nearDuplicatePicks, solveHomography } from "./homography";
 import { onPitch, type PitchSize } from "./pitchModel";
 
 /**
@@ -153,6 +153,21 @@ export function describeCoverage(region: SupportedRegion): string {
   return `Your reference points cover only about ${share}% of the pitch, so positions outside that area will be unreliable.`;
 }
 
+/**
+ * How much of the pitch has to be covered before the fit is worth trusting away
+ * from its own points.
+ *
+ * This replaces the old frame-space warning, which was measured to stay silent in
+ * the one case it existed for: seven picks inside a penalty area covered 44% of
+ * the *frame* — comfortably above the 8% threshold — while covering about 15% of
+ * the *pitch*, where the extrapolation error was 11 m (technical-design-R1 §6.3).
+ */
+export const NARROW_COVERAGE_SHARE = 0.6;
+
+export function isNarrowCoverage(region: SupportedRegion): boolean {
+  return region.shareOfPitch < NARROW_COVERAGE_SHARE;
+}
+
 /** A stored calibration's reference points, as the position flow needs them. */
 export type StoredReference = {
   imageU: number;
@@ -160,6 +175,30 @@ export type StoredReference = {
   xM: number;
   yM: number;
 };
+
+/**
+ * Whether an event's position markers belong on the frame at a moment.
+ *
+ * Positions have no time window of their own — a position is the assertion that
+ * a player was *there*, at its event's anchor — so the honest rule is the
+ * event's own range: inside it the markers are shown, outside it they hide.
+ * Without this a marker stays pinned over footage where the player has long
+ * since moved, which reads as "this is where they are now" rather than "this is
+ * where they were". A drawing escapes the same problem with its window (§5.4);
+ * this is the position's equivalent, resolved from the event rather than stored.
+ *
+ * Marking is the exception: placing a position needs the existing markers on
+ * screen wherever the playhead happens to be.
+ */
+export function isPositionVisibleAt(
+  atMs: number,
+  range: { startMs: number; endMs: number } | null,
+  marking: boolean,
+): boolean {
+  if (marking) return true;
+  if (!range) return false;
+  return atMs >= range.startMs && atMs <= range.endMs;
+}
 
 /**
  * The homography a stored calibration implies.
@@ -178,7 +217,7 @@ export function homographyOf(
     xM: point.xM,
     yM: point.yM,
   }));
-  return solveHomography(correspondences, frame);
+  return solveHomography(correspondences);
 }
 
 /** The region a stored calibration constrains, for the honesty checks. */
@@ -187,4 +226,34 @@ export function regionOf(points: StoredReference[], size: PitchSize): SupportedR
     points.map((point) => [point.xM, point.yM] as Point),
     size,
   );
+}
+
+/**
+ * What is wrong with a calibration **already stored**, if anything.
+ *
+ * Existing rows are not re-solved when they are listed, so a calibration saved
+ * before these checks existed would otherwise still read as "lines up closely".
+ * Found on real data: a stored four-point calibration had two clicks 1.2 px
+ * apart that are 32 metres apart on the pitch, and reported 1.4e-10 px — the app
+ * called it a good fit, which is how it survived review.
+ */
+export function storedCalibrationWarning(
+  points: StoredReference[],
+  frame: { width: number; height: number },
+): string | null {
+  const duplicate = nearDuplicatePicks(
+    points.map((point) => ({
+      px: point.imageU * frame.width,
+      py: point.imageV * frame.height,
+      xM: point.xM,
+      yM: point.yM,
+    })),
+  );
+  if (duplicate) {
+    return "Two of its points are in the same place, so it cannot be right. Redo it.";
+  }
+  if (points.length <= MIN_POINTS) {
+    return "Four points fit exactly, so its error is not evidence. Add another point.";
+  }
+  return null;
 }

@@ -1,11 +1,12 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef } from "react";
 import { useContentRect } from "@/features/player/useContentRect";
 import type { Primitive } from "@/lib/annotate/primitives";
+import { regionOf } from "@/lib/pitch/positions";
 import { outlinePrimitives } from "@/lib/pitch/project";
 import { type Canvas2D, renderPrimitives } from "@/lib/render/canvas";
 import { solvePicks, useCalibrationStore } from "@/stores/calibrationStore";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { pickMarkers } from "./markers";
+import { normaliseFromBox, pickMarkers } from "./markers";
 
 /**
  * The verification overlay (FR-30.2).
@@ -19,9 +20,20 @@ import { pickMarkers } from "./markers";
  * The outline is projected into primitives in normalised frame coordinates and
  * drawn by the same renderer as the annotations, so the two can never disagree
  * about where something lies on the frame.
+ *
+ * Only the part of the pitch the picks support is drawn. Beyond the region those
+ * clicks constrain the projection is extrapolation, and a tight-shot calibration
+ * otherwise draws fifteen plausible-looking polylines of fiction.
+ *
+ * Markers can be dragged — and nudged with the arrow keys once focused — because
+ * "it is nearly right, let me move it two pixels" is the normal way a calibration
+ * gets finished, and re-picking from scratch to fix one point is not.
  */
 
 const OUTLINE_STROKE = "#22D3EE";
+
+/** A keyboard nudge, in normalised frame units (about 2 px on a 1920 frame). */
+const NUDGE = 0.001;
 
 export function CalibrationOverlay({
   stageRef,
@@ -31,17 +43,27 @@ export function CalibrationOverlay({
   videoRef: RefObject<HTMLVideoElement | null>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef<string | null>(null);
   const rect = useContentRect(stageRef, videoRef);
 
   const videoId = useCalibrationStore((state) => state.videoId);
   const picks = useCalibrationStore((state) => state.picks);
   const pendingFeature = useCalibrationStore((state) => state.pendingFeature);
+  const pitchLengthM = useCalibrationStore((state) => state.pitchLengthM);
+  const pitchWidthM = useCalibrationStore((state) => state.pitchWidthM);
   const addPick = useCalibrationStore((state) => state.addPick);
+  const movePick = useCalibrationStore((state) => state.movePick);
 
   const probe = useLibraryStore((state) => state.probe);
   const frame = useMemo(
     () => ({ width: probe?.width ?? 0, height: probe?.height ?? 0 }),
     [probe?.width, probe?.height],
+  );
+
+  const size = useMemo(
+    () => ({ lengthM: pitchLengthM, widthM: pitchWidthM }),
+    [pitchLengthM, pitchWidthM],
   );
 
   /** Picking needs a usable frame size; without it there is no pixel space. */
@@ -50,6 +72,8 @@ export function CalibrationOverlay({
     () => (solvable ? solvePicks(picks, frame) : null),
     [picks, frame, solvable],
   );
+
+  const region = useMemo(() => (picks.length >= 3 ? regionOf(picks, size) : null), [picks, size]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -74,16 +98,14 @@ export function CalibrationOverlay({
 
     const primitives: Primitive[] = outlinePrimitives(
       outcome.h,
-      {
-        lengthM: useCalibrationStore.getState().pitchLengthM,
-        widthM: useCalibrationStore.getState().pitchWidthM,
-      },
+      size,
       frame,
       { stroke: OUTLINE_STROKE, width: 0.0022, opacity: 0.9 },
+      region,
     );
 
     renderPrimitives(primitives, ctx as unknown as Canvas2D, rect.w, rect.h);
-  }, [outcome, frame, rect.h, rect.w]);
+  }, [outcome, frame, rect.h, rect.w, region, size]);
 
   useEffect(() => {
     draw();
@@ -96,11 +118,34 @@ export function CalibrationOverlay({
     // The canvas is sized to the picture rect, so its own box *is* the frame.
     // Measuring against it can never disagree with where the click landed, and
     // it cannot go stale the way a rect held in React state can.
-    const box = event.currentTarget.getBoundingClientRect();
-    if (box.width <= 0 || box.height <= 0) return;
-    const imageU = (event.clientX - box.left) / box.width;
-    const imageV = (event.clientY - box.top) / box.height;
-    void addPick(imageU, imageV);
+    const point = normaliseFromBox(
+      event.currentTarget.getBoundingClientRect(),
+      event.clientX,
+      event.clientY,
+    );
+    if (!point) return;
+    void addPick(point[0], point[1]);
+  };
+
+  /** Drags an existing pick, measured against the layer that carries the picture box. */
+  const onMarkerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const feature = draggingRef.current;
+    if (!feature) return;
+    const layer = wrapperRef.current;
+    if (!layer) return;
+    const point = normaliseFromBox(layer.getBoundingClientRect(), event.clientX, event.clientY);
+    if (!point) return;
+    movePick(feature, point[0], point[1]);
+  };
+
+  const nudge = (feature: string, dx: number, dy: number) => {
+    const current = useCalibrationStore.getState().picks.find((pick) => pick.feature === feature);
+    if (!current) return;
+    movePick(
+      feature,
+      Math.min(1, Math.max(0, current.imageU + dx)),
+      Math.min(1, Math.max(0, current.imageV + dy)),
+    );
   };
 
   if (videoId === null) return null;
@@ -129,19 +174,51 @@ export function CalibrationOverlay({
           inside it. Adding the offset in both places is the double offset that
           put every marker a letterbox away from its click. */}
       <div
+        ref={wrapperRef}
         className="pointer-events-none absolute"
         style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
       >
         {markers.map((marker, index) => (
-          <span
+          <button
             key={marker.feature}
-            aria-hidden="true"
-            title={marker.feature}
-            className="absolute grid size-4 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white bg-cyan-400 text-[9px] font-medium text-black"
+            type="button"
+            title={`${marker.feature} — drag to adjust`}
+            aria-label={`Reference point ${index + 1}, ${marker.feature}. Drag to adjust, or use the arrow keys.`}
+            className="pointer-events-auto absolute grid size-4 -translate-x-1/2 -translate-y-1/2 cursor-grab place-items-center rounded-full border border-white bg-cyan-400 text-[9px] font-medium text-black active:cursor-grabbing"
             style={{ left: marker.point[0], top: marker.point[1] }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              draggingRef.current = marker.feature;
+            }}
+            onPointerMove={onMarkerMove}
+            onPointerUp={(event) => {
+              draggingRef.current = null;
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+            }}
+            onPointerCancel={() => {
+              draggingRef.current = null;
+            }}
+            onKeyDown={(event) => {
+              const step =
+                event.key === "ArrowLeft"
+                  ? [-NUDGE, 0]
+                  : event.key === "ArrowRight"
+                    ? [NUDGE, 0]
+                    : event.key === "ArrowUp"
+                      ? [0, -NUDGE]
+                      : event.key === "ArrowDown"
+                        ? [0, NUDGE]
+                        : null;
+              if (!step) return;
+              event.preventDefault();
+              nudge(marker.feature, step[0], step[1]);
+            }}
           >
             {index + 1}
-          </span>
+          </button>
         ))}
       </div>
     </>

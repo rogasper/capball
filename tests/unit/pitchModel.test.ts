@@ -88,11 +88,18 @@ describe("pitch outline", () => {
     expect(circle?.points.length).toBeGreaterThan(40);
   });
 
-  it("draws both goals behind the goal line", () => {
-    const goals = pitchOutline(standard).filter((line) =>
-      line.points.some((point) => Math.abs(point[0]) > 52.5),
-    );
-    expect(goals).toHaveLength(2);
+  it("draws nothing beyond the goal line — the invented goal boxes are gone", () => {
+    // They were an orientation cue, but under a projection they read as pitch
+    // markings and made a tight calibration look more broken than it was.
+    const halfLength = standard.lengthM / 2;
+    const halfWidth = standard.widthM / 2;
+
+    for (const line of pitchOutline(standard)) {
+      for (const [px, py] of line.points) {
+        expect(Math.abs(px)).toBeLessThanOrEqual(halfLength + 1e-9);
+        expect(Math.abs(py)).toBeLessThanOrEqual(halfWidth + 1e-9);
+      }
+    }
   });
 
   it("draws every penalty area once", () => {

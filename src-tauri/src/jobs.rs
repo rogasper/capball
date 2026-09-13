@@ -35,6 +35,26 @@ pub enum ExportMode {
     Accurate,
 }
 
+/// One drawing overlay to composite into a clip (M10, FR-40.1).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayInput {
+    /// A transparent PNG rendered at the export resolution by the webview.
+    pub path: String,
+    /// The `enable` expression, **relative to the exported clip**, e.g.
+    /// `between(t,0.000,2.500)`. Built and tested on the TypeScript side, where
+    /// the clip-relative shift is the error most worth guarding.
+    pub enable: String,
+}
+
+/// What a cache prune removed, so the UI can say something honest about it.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PruneReport {
+    pub removed_files: u64,
+    pub freed_bytes: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobEvent {
@@ -390,6 +410,11 @@ pub fn start_media_job(
 }
 
 /// Cuts one clip to a destination the user chose (FR-9.1, FR-9.3).
+///
+/// With overlays, the video stream is composited through a `filter_complex`
+/// chain and therefore re-encodes — filters cannot be combined with `-c copy`
+/// (D22). Audio is still copied. The overlay PNGs already carry the frame's
+/// dimensions, so each is placed at `0:0` with no scaling.
 #[tauri::command]
 pub fn start_export(
     app: AppHandle,
@@ -398,9 +423,21 @@ pub fn start_export(
     start_ms: i64,
     end_ms: i64,
     mode: ExportMode,
+    overlays: Vec<OverlayInput>,
 ) -> Result<MediaJob, String> {
     if !std::path::Path::new(&input).is_file() {
         return Err(format!("not a readable file: {input}"));
+    }
+
+    // A missing overlay must fail loudly. Exporting the clip without its
+    // drawings, silently, is the one outcome the user would never notice.
+    for overlay in &overlays {
+        if !std::path::Path::new(&overlay.path).is_file() {
+            return Err(format!(
+                "a drawing overlay is missing ({}); nothing was exported",
+                overlay.path
+            ));
+        }
     }
 
     let final_path = PathBuf::from(&output);
@@ -421,33 +458,33 @@ pub fn start_export(
     // frame-accurate, because ffmpeg discards the frames before the target.
     args.extend(["-ss".to_string(), seconds(start_ms)]);
     args.extend(["-i".to_string(), input.clone()]);
+
+    // Every overlay is a separate input. They come before `-t` so that option
+    // stays an output option rather than attaching to the last image.
+    for overlay in &overlays {
+        args.extend(["-i".to_string(), overlay.path.clone()]);
+    }
     args.extend(["-t".to_string(), seconds(duration_ms)]);
 
-    match mode {
-        ExportMode::Fast => args.extend(
-            ["-c", "copy", "-avoid_negative_ts", "make_zero"]
-                .iter()
-                .map(|value| (*value).to_string()),
-        ),
-        ExportMode::Accurate => args.extend(
-            [
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "20",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "160k",
-            ]
-            .iter()
-            .map(|value| (*value).to_string()),
-        ),
+    if overlays.is_empty() {
+        match mode {
+            ExportMode::Fast => args.extend(
+                ["-c", "copy", "-avoid_negative_ts", "make_zero"]
+                    .iter()
+                    .map(|value| (*value).to_string()),
+            ),
+            ExportMode::Accurate => args.extend(accurate_video_args()),
+        }
+    } else {
+        let graph = overlay_filter(&overlays);
+        let last = format!("[v{}]", overlays.len());
+        args.extend(["-filter_complex".to_string(), graph]);
+        args.extend(["-map".to_string(), last]);
+        args.extend(["-map".to_string(), "0:a?".to_string()]);
+        args.extend(["-c:a".to_string(), "copy".to_string()]);
+        args.extend(accurate_video_args());
     }
+
     args.extend(["-movflags".to_string(), "+faststart".to_string()]);
 
     let temp_path = final_path.with_extension("part.mp4");
@@ -466,6 +503,49 @@ pub fn start_export(
             cleanup: Vec::new(),
         },
     )
+}
+
+/// The re-encode settings, shared by the accurate path and every overlay job.
+fn accurate_video_args() -> Vec<String> {
+    [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+    ]
+    .iter()
+    .map(|value| (*value).to_string())
+    .collect()
+}
+
+/// The `filter_complex` chain that overlays each PNG in turn.
+///
+/// Input 0 is the video and overlay *i* is input *i+1*, so the chain walks
+/// `[0:v] → [v1] → [v2] …`. Pure, so it is unit-tested on the exact expressions
+/// that shipped rather than by reading a log.
+fn overlay_filter(overlays: &[OverlayInput]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut previous = "[0:v]".to_string();
+
+    for (index, overlay) in overlays.iter().enumerate() {
+        let output = format!("[v{}]", index + 1);
+        parts.push(format!(
+            "{previous}[{}:v]overlay=0:0:enable='{}'{output}",
+            index + 1,
+            overlay.enable
+        ));
+        previous = output;
+    }
+
+    parts.join(";")
 }
 
 /// Joins already-rendered clips into one file, in the order given (FR-9.2).
@@ -547,4 +627,136 @@ pub fn cancel_job(app: AppHandle, job_id: String) -> Result<(), String> {
     }
     jobs.remove(&job_id);
     Ok(())
+}
+
+fn is_old(age: Option<std::time::Duration>, limit: std::time::Duration) -> bool {
+    age.map(|value| value >= limit).unwrap_or(false)
+}
+
+/// Removes one directory's stale files, accumulating what went.
+fn prune_dir(
+    dir: &std::path::Path,
+    mut should_remove: impl FnMut(&str, Option<std::time::Duration>) -> bool,
+    report: &mut PruneReport,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        let age = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.elapsed().ok());
+
+        if !should_remove(&name, age) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            report.removed_files += 1;
+            report.freed_bytes += size;
+        }
+    }
+}
+
+/// Removes derived files a library no longer needs (NFR-22, carried from M6).
+///
+/// Two different questions, so two different rules. Anything keyed by a source
+/// fingerprint — the prepared playback copy, extracted frames, thumbnails — is
+/// kept exactly while the library still references that file; if the video is
+/// removed, its derived copies are waste, and if it is opened again they are
+/// rebuilt on demand. Scratch from an export (overlay PNGs and concat lists) has
+/// no reference to check, so age is the only honest test.
+#[tauri::command]
+pub fn prune_cache(
+    app: AppHandle,
+    keep_paths: Vec<String>,
+    older_than_seconds: u64,
+) -> Result<PruneReport, String> {
+    let cache = cache_dir(&app)?;
+    let keep: std::collections::HashSet<String> = keep_paths
+        .iter()
+        .map(|path| fingerprint(path))
+        .collect();
+    let limit = std::time::Duration::from_secs(older_than_seconds);
+
+    let mut report = PruneReport::default();
+
+    for folder in ["prepared", "frames", "thumbs"] {
+        prune_dir(
+            &cache.join(folder),
+            |name, age| {
+                // A copy still being written is removed only once it is stale.
+                if name.contains(".part.") {
+                    return is_old(age, limit);
+                }
+                let key = name
+                    .split('.')
+                    .next()
+                    .unwrap_or(name)
+                    .split('-')
+                    .next()
+                    .unwrap_or(name);
+                !keep.contains(key)
+            },
+            &mut report,
+        );
+    }
+
+    for folder in ["overlays", "concat"] {
+        prune_dir(
+            &cache.join(folder),
+            |_, age| is_old(age, limit),
+            &mut report,
+        );
+    }
+
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn overlay(path: &str, enable: &str) -> OverlayInput {
+        OverlayInput {
+            path: path.to_string(),
+            enable: enable.to_string(),
+        }
+    }
+
+    #[test]
+    fn one_overlay_composites_from_the_video_input() {
+        let graph = overlay_filter(&[overlay("/tmp/a.png", "between(t,0.000,2.500)")]);
+        assert_eq!(
+            graph,
+            "[0:v][1:v]overlay=0:0:enable='between(t,0.000,2.500)'[v1]"
+        );
+    }
+
+    #[test]
+    fn a_second_overlay_chains_off_the_first_result() {
+        let graph = overlay_filter(&[
+            overlay("/tmp/a.png", "between(t,0.000,2.500)"),
+            overlay("/tmp/b.png", "between(t,4.000,6.500)"),
+        ]);
+        assert_eq!(
+            graph,
+            "[0:v][1:v]overlay=0:0:enable='between(t,0.000,2.500)'[v1];\
+             [v1][2:v]overlay=0:0:enable='between(t,4.000,6.500)'[v2]"
+        );
+    }
+
+    #[test]
+    fn no_overlays_produce_no_graph() {
+        assert_eq!(overlay_filter(&[]), "");
+    }
 }

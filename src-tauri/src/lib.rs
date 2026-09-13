@@ -2,10 +2,12 @@ mod commands;
 mod jobs;
 
 use commands::{
-    check_media_tools, default_export_dir, extract_thumbnail, file_status, probe_media,
-    read_text_file, register_asset_path, write_text_file,
+    check_media_tools, default_export_dir, extract_frame, extract_thumbnail, file_status,
+    probe_media, read_text_file, register_asset_path, write_overlay_png, write_text_file,
 };
-use jobs::{cancel_job, start_concat, start_export, start_media_job, JobRegistry};
+use jobs::{
+    cancel_job, prune_cache, start_concat, start_export, start_media_job, JobRegistry,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,10 +25,13 @@ pub fn run() {
             start_export,
             start_concat,
             extract_thumbnail,
+            extract_frame,
+            write_overlay_png,
             default_export_dir,
             read_text_file,
             write_text_file,
-            cancel_job
+            cancel_job,
+            prune_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

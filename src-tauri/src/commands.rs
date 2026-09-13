@@ -382,6 +382,20 @@ mod tests {
         let total = bytes.len() as u64;
         assert_eq!(faststart_in(&mut Cursor::new(bytes), total), None);
     }
+
+    #[test]
+    fn decodes_base64_against_known_vectors() {
+        assert_eq!(decode_base64("").unwrap(), Vec::<u8>::new());
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello".to_vec());
+        assert_eq!(decode_base64("AAEC").unwrap(), vec![0u8, 1, 2]);
+        // Wrapping and padding are both tolerated; `toDataURL` emits neither.
+        assert_eq!(decode_base64("aGVs\nbG8=").unwrap(), b"hello".to_vec());
+    }
+
+    #[test]
+    fn refuses_base64_with_a_character_it_cannot_read() {
+        assert!(decode_base64("aGV*sbG8=").is_err());
+    }
 }
 
 /// Renders one frame to a cached JPEG and grants it to the asset protocol.
@@ -442,6 +456,137 @@ pub fn extract_thumbnail(
         .map_err(|err| err.to_string())?;
 
     Ok(out.to_string_lossy().to_string())
+}
+
+/// Renders one frame at **full resolution** as a PNG and grants it to the asset
+/// protocol (FR-30.2).
+///
+/// This is what makes a calibration clickable: the picture on screen is around
+/// 430 CSS px wide for a 1920-px frame, so a click there is worth more than four
+/// video pixels. Keyed by the source fingerprint and the moment, so reopening
+/// the magnified picker costs nothing.
+#[tauri::command]
+pub fn extract_frame(app: tauri::AppHandle, input: String, at_ms: i64) -> Result<String, String> {
+    use tauri::Manager;
+
+    if !std::path::Path::new(&input).is_file() {
+        return Err(format!("not a readable file: {input}"));
+    }
+
+    let dir = crate::jobs::cache_dir(&app)?.join("frames");
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+
+    let at_ms = at_ms.max(0);
+    let out = dir.join(format!("{}-{at_ms}.png", crate::jobs::fingerprint(&input)));
+    let already_rendered = out.is_file() && std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0) > 0;
+
+    if !already_rendered {
+        let seconds = format!("{:.3}", at_ms as f64 / 1000.0);
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-ss",
+                &seconds,
+                "-i",
+                &input,
+                "-frames:v",
+                "1",
+            ])
+            .arg(&out)
+            .status()
+            .map_err(|err| format!("ffmpeg could not be started: {err}"))?;
+
+        if !status.success() {
+            // Never leave a zero-byte file behind pretending to be a frame.
+            let _ = std::fs::remove_file(&out);
+            return Err("could not render that frame".into());
+        }
+    }
+
+    app.asset_protocol_scope()
+        .allow_file(&out)
+        .map_err(|err| err.to_string())?;
+
+    Ok(out.to_string_lossy().to_string())
+}
+
+/// Decodes standard base64, ignoring padding and line breaks.
+///
+/// Kept here rather than pulling in a crate for one call: the alphabet is fixed,
+/// the input is produced by `canvas.toDataURL`, and a bad character is a plain
+/// error rather than a silent truncation.
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    fn value(byte: u8) -> Option<u32> {
+        match byte {
+            b'A'..=b'Z' => Some((byte - b'A') as u32),
+            b'a'..=b'z' => Some((byte - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((byte - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+
+    for byte in input.bytes() {
+        if byte == b'=' || byte == b'\n' || byte == b'\r' {
+            continue;
+        }
+        let digit =
+            value(byte).ok_or_else(|| format!("unexpected character {:?}", byte as char))?;
+        buffer = (buffer << 6) | digit;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+
+    Ok(out)
+}
+
+/// Writes a transparent overlay PNG into the app cache and returns its path
+/// (M10, FR-40.1).
+///
+/// The image is rendered by the same canvas renderer the app previews with, and
+/// handed here as a data URL. Only the name is taken from the caller, and only
+/// characters that cannot escape the cache directory survive.
+#[tauri::command]
+pub fn write_overlay_png(
+    app: tauri::AppHandle,
+    name: String,
+    data_url: String,
+) -> Result<String, String> {
+    let payload = data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or_else(|| "the overlay was not a base64 PNG".to_string())?;
+
+    let bytes = decode_base64(payload)
+        .map_err(|err| format!("the overlay could not be decoded: {err}"))?;
+    if bytes.is_empty() {
+        return Err("the overlay had no pixels in it".into());
+    }
+
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if safe.is_empty() {
+        return Err("the overlay had no usable name".into());
+    }
+
+    let dir = crate::jobs::cache_dir(&app)?.join("overlays");
+    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+
+    let path = dir.join(format!("{safe}.png"));
+    std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// Where clips go unless the user picks somewhere else.

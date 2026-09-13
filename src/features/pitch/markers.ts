@@ -1,5 +1,26 @@
 import type { Rect } from "@/lib/annotate/geometry";
 
+/** Anything that reports its own box the way `getBoundingClientRect` does. */
+export type BoxLike = { left: number; top: number; width: number; height: number };
+
+/**
+ * A client point as **frame-normalised** coordinates inside a box.
+ *
+ * The box is the picture's own rect — the canvas *is* the picture by
+ * construction — so measuring against it can never disagree with where the click
+ * landed, and there is nothing held in React state to go stale between a
+ * re-measure and a click. Returns null for a zero-sized box, which is what a
+ * hidden or not-yet-laid-out element reports.
+ */
+export function normaliseFromBox(
+  box: BoxLike,
+  clientX: number,
+  clientY: number,
+): [number, number] | null {
+  if (box.width <= 0 || box.height <= 0) return null;
+  return [(clientX - box.left) / box.width, (clientY - box.top) / box.height];
+}
+
 /**
  * Where a reference point's numbered marker goes, in **picture-relative** pixels.
  *

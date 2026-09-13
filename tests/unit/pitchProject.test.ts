@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { solveHomography } from "@/lib/pitch/homography";
+import { applyHomography, solveHomography } from "@/lib/pitch/homography";
 import { findFeature } from "@/lib/pitch/pitchModel";
+import { isSupported, supportedRegion } from "@/lib/pitch/positions";
 import { outlinePrimitives, projectOutline, projectPositions } from "@/lib/pitch/project";
 import type { Correspondence } from "@/lib/pitch/types";
 
@@ -37,7 +38,7 @@ function calibrated() {
     const { px, py } = camera(found.x, found.y);
     return { px, py, xM: found.x, yM: found.y };
   });
-  const result = solveHomography(points, FRAME);
+  const result = solveHomography(points);
   if (!result.ok) throw new Error(result.reason);
   return result.h;
 }
@@ -45,9 +46,9 @@ function calibrated() {
 describe("projectOutline", () => {
   it("draws every line of the pitch model", () => {
     const { lines } = projectOutline(calibrated(), SIZE, FRAME);
-    // The boundary, halfway, two areas, two six-yard boxes, two goals, the
-    // circle, two arcs and four corners.
-    expect(lines.length).toBeGreaterThanOrEqual(14);
+    // The boundary, halfway, two areas, two six-yard boxes, the circle, two
+    // arcs and four corners.
+    expect(lines.length).toBeGreaterThanOrEqual(13);
     expect(lines.every((line) => line.length >= 2)).toBe(true);
   });
 
@@ -74,6 +75,38 @@ describe("projectOutline", () => {
       }
     }
     expect(clipped).toBe(false);
+  });
+
+  it("draws only the part of the pitch the picks support, and says it clipped", () => {
+    // What a tight-shot calibration looks like: the picks constrain one half.
+    // The extrapolated half is fiction — 11 m median error when measured — and
+    // drawing it is what made the shape look broken (technical-design-R1 §6.3).
+    const region = supportedRegion(
+      [
+        [-52.5, -34],
+        [-20, -34],
+        [-20, 34],
+        [-52.5, 34],
+      ],
+      SIZE,
+    );
+
+    const h = calibrated();
+    const clippedOutline = projectOutline(h, SIZE, FRAME, region);
+    expect(clippedOutline.regionClipped).toBe(true);
+
+    // Every drawn point really is inside the region the picks constrain.
+    for (const line of clippedOutline.lines) {
+      for (const [u, v] of line) {
+        const metres = applyHomography(h, u * FRAME.width, v * FRAME.height);
+        expect(isSupported(region, [metres.x, metres.y])).toBe(true);
+      }
+    }
+
+    // And less of the model is drawn than without the region.
+    const count = (lines: [number, number][][]) =>
+      lines.reduce((sum, line) => sum + line.length, 0);
+    expect(count(clippedOutline.lines)).toBeLessThan(count(projectOutline(h, SIZE, FRAME).lines));
   });
 
   it("breaks a line rather than drawing it across the frame, when the frame is far smaller than the projection", () => {

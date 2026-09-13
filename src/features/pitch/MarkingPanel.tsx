@@ -1,4 +1,4 @@
-import { Play, Plus, Target, Trash2 } from "lucide-react";
+import { Maximize2, Play, Plus, Target, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,12 +11,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { PositionRow } from "@/lib/db/queries/positions";
-import { describeCoverage, regionOf } from "@/lib/pitch/positions";
+import { describeCoverage, regionOf, storedCalibrationWarning } from "@/lib/pitch/positions";
 import { formatTimecode } from "@/lib/time/timecode";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { activeCalibrationAt, useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useMagnifierStore } from "@/stores/magnifierStore";
 import { usePositionStore } from "@/stores/positionStore";
 import { useSquadStore } from "@/stores/squadStore";
 import { useTagStore } from "@/stores/tagStore";
@@ -35,6 +36,7 @@ export function MarkingPanel() {
   const eventId = useAnnotationStore((state) => state.eventId);
   const events = useEventStore((state) => state.events);
   const match = useLibraryStore((state) => state.currentMatch);
+  const probe = useLibraryStore((state) => state.probe);
   const calibrations = useCalibrationStore((state) => state.calibrations);
   const pitchLengthM = useCalibrationStore((state) => state.pitchLengthM);
   const pitchWidthM = useCalibrationStore((state) => state.pitchWidthM);
@@ -49,6 +51,7 @@ export function MarkingPanel() {
   const notice = usePositionStore((state) => state.notice);
   const error = usePositionStore((state) => state.error);
   const setMarking = usePositionStore((state) => state.setMarking);
+  const openMagnifier = useMagnifierStore((state) => state.open);
   const setTarget = usePositionStore((state) => state.setTarget);
   const remove = usePositionStore((state) => state.remove);
   const loadFor = usePositionStore((state) => state.loadFor);
@@ -72,6 +75,19 @@ export function MarkingPanel() {
     () =>
       calibration && calibration.points.length >= 3 ? regionOf(calibration.points, size) : null,
     [calibration, size],
+  );
+
+  // A calibration with two clicks in the same place cannot be trusted, and the
+  // marking flow is where that matters most — say so before a position is placed.
+  // The click positions are stored normalised, so the check needs the frame size.
+  const frame = useMemo(
+    () => ({ width: probe?.width ?? 0, height: probe?.height ?? 0 }),
+    [probe?.width, probe?.height],
+  );
+  const flaw = useMemo(
+    () =>
+      calibration && frame.width > 0 ? storedCalibrationWarning(calibration.points, frame) : null,
+    [calibration, frame],
   );
 
   // The tagging context is the default here too (FR-30.3): the player being
@@ -182,6 +198,8 @@ export function MarkingPanel() {
         </p>
       )}
 
+      {calibration && flaw && <p className="text-caption text-warning">{flaw}</p>}
+
       <div className="space-y-2">
         <Label className="text-label text-muted-foreground">Marking as</Label>
         <Select
@@ -261,6 +279,27 @@ export function MarkingPanel() {
           <Target aria-hidden="true" />
           {marking ? "Stop marking" : "Mark positions on the frame"}
         </Button>
+
+        {/* The video is shown at roughly 430 px for a 1920-px picture, so a
+            screen pixel is worth more than four video pixels here too. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full"
+          disabled={!calibration || !target}
+          onClick={() => {
+            setMarking(true);
+            openMagnifier("position");
+          }}
+        >
+          <Maximize2 aria-hidden="true" />
+          Mark on a magnified frame
+        </Button>
+
+        <p className="text-caption text-muted-foreground">
+          Markers show while the playhead is inside this event, and hide when you scrub away from it
+          — a position only tells the truth at its own moment. Marking keeps them visible.
+        </p>
 
         {marking && !notice && (
           <p className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-label">

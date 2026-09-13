@@ -26,6 +26,52 @@ export const RMS_ACCEPTABLE_PX = 6;
 
 export const HOMOGRAPHY_LENGTH = 9;
 
+/**
+ * How close two clicks have to be before they are treated as the same click.
+ *
+ * Two different landmarks cannot both be under this many pixels apart on a
+ * frame of ordinary broadcast size. Found on real data: a stored calibration had
+ * "centre circle, left" and "left penalty spot" — 32 metres apart on the pitch —
+ * clicked 1.2 px apart, and the four-point fit reported an error of 1.4e-10 px
+ * because four points are always fitted exactly. The app called that "lines up
+ * closely", which is how a nonsense calibration survived review.
+ *
+ * The threshold is the larger of this floor and a small fraction of the median
+ * separation between picks, so it also behaves on a frame that is not 1080p.
+ */
+export const DUPLICATE_PICK_PX = 6;
+
+/**
+ * The closest pair of clicks, when that pair is close enough to be one click.
+ *
+ * Indices are into the array given to the solve, so the caller can name the two
+ * features rather than printing numbers at the user.
+ */
+export function nearDuplicatePicks(
+  points: Correspondence[],
+  floorPx = DUPLICATE_PICK_PX,
+): { a: number; b: number; px: number } | null {
+  if (points.length < 2) return null;
+
+  let closest: { a: number; b: number; px: number } | null = null;
+  const distances: number[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const distance = Math.hypot(points[i].px - points[j].px, points[i].py - points[j].py);
+      distances.push(distance);
+      if (!closest || distance < closest.px) closest = { a: i, b: j, px: distance };
+    }
+  }
+  if (!closest) return null;
+
+  distances.sort((a, b) => a - b);
+  const median = distances[distances.length >> 1] ?? 0;
+  const threshold = Math.max(floorPx, median * 0.01);
+
+  return closest.px < threshold ? closest : null;
+}
+
 type Point = [number, number];
 
 /** Row-major 3×3 multiply. */
@@ -109,7 +155,7 @@ function spreadDeterminant(points: Point[]): number {
 }
 
 /**
- * Whether any three points sit on a straight line.
+ * The three points that sit on a straight line, if any do.
  *
  * Only fatal at exactly four points: four points with three in a row do not
  * determine a homography at all, while the same three inside a larger set are
@@ -118,7 +164,7 @@ function spreadDeterminant(points: Point[]): number {
  * is exactly this case, so it is worth naming rather than reporting as a generic
  * failure.
  */
-function hasCollinearTriple(points: Point[]): boolean {
+function collinearTriple(points: Point[]): [number, number, number] | null {
   for (let i = 0; i < points.length; i++) {
     for (let j = i + 1; j < points.length; j++) {
       for (let k = j + 1; k < points.length; k++) {
@@ -127,11 +173,11 @@ function hasCollinearTriple(points: Point[]): boolean {
             (points[j][0] - points[i][0]) * (points[k][1] - points[i][1]) -
               (points[k][0] - points[i][0]) * (points[j][1] - points[i][1]),
           ) / 2;
-        if (area < 1e-3) return true;
+        if (area < 1e-3) return [i, j, k];
       }
     }
   }
-  return false;
+  return null;
 }
 
 /** Gaussian elimination with partial pivoting; null when a pivot vanishes. */
@@ -188,14 +234,23 @@ export function residualsPx(h: number[], points: Correspondence[]): number[] {
   });
 }
 
-export function solveHomography(
-  points: Correspondence[],
-  frame?: { width: number; height: number },
-): SolveOutcome {
+export function solveHomography(points: Correspondence[]): SolveOutcome {
   if (points.length < MIN_POINTS) {
     return {
       ok: false,
       reason: `A calibration needs at least ${MIN_POINTS} reference points; ${points.length} picked.`,
+    };
+  }
+
+  // Two landmarks cannot be the same click. Checked before the solve, because a
+  // four-point fit hides it completely: it passes exactly through whatever it is
+  // given, so the error comes back at 1e-10 and reads as a perfect calibration.
+  const duplicate = nearDuplicatePicks(points);
+  if (duplicate) {
+    return {
+      ok: false,
+      reason: `Two of these points are ${duplicate.px.toFixed(1)} px apart, so they are almost certainly the same click. Two different landmarks cannot share a place on the frame.`,
+      suspectIndices: [duplicate.a, duplicate.b],
     };
   }
 
@@ -231,12 +286,16 @@ export function solveHomography(
 
   const solution = solveLinear(normal, rhs);
   if (!solution) {
-    if (points.length === MIN_POINTS && hasCollinearTriple(image.points)) {
-      return {
-        ok: false,
-        reason:
-          "Three of these four points are in a straight line, so they do not fix a calibration. Add another point off that line.",
-      };
+    if (points.length === MIN_POINTS) {
+      const triple = collinearTriple(image.points);
+      if (triple) {
+        return {
+          ok: false,
+          reason:
+            "Three of these four points are in a straight line, so they do not fix a calibration. Add another point off that line.",
+          suspectIndices: triple,
+        };
+      }
     }
     return {
       ok: false,
@@ -261,34 +320,46 @@ export function solveHomography(
     residuals.reduce((sum, value) => sum + value * value, 0) / residuals.length,
   );
 
-  return { ok: true, h, quality: assess(rmsErrorPx, residuals, points, frame) };
+  return { ok: true, h, quality: assess(rmsErrorPx, residuals, points.length) };
 }
 
-function assess(
-  rmsErrorPx: number,
-  residualsPx: number[],
-  points: Correspondence[],
-  frame?: { width: number; height: number },
-): Quality {
+/**
+ * The point a poor fit most likely got wrong.
+ *
+ * A large residual is not proof — the fit spreads its error across every point —
+ * but the largest one is the most probable mis-pick, and naming it turns "the
+ * outline is wrong" into "check this one". Returns null for an empty list.
+ */
+export function worstResidual(residualsPx: number[]): { index: number; px: number } | null {
+  if (residualsPx.length === 0) return null;
+
+  let index = 0;
+  for (let i = 1; i < residualsPx.length; i++) {
+    if (residualsPx[i] > residualsPx[index]) index = i;
+  }
+  return { index, px: residualsPx[index] };
+}
+
+function assess(rmsErrorPx: number, residualsPx: number[], pointCount: number): Quality {
   const verdict =
     rmsErrorPx <= RMS_GOOD_PX ? "good" : rmsErrorPx <= RMS_ACCEPTABLE_PX ? "acceptable" : "poor";
 
+  // Coverage — how much of the *pitch* the picks constrain — is deliberately not
+  // judged here. It is a pitch-space question, and `lib/pitch/positions.ts` owns
+  // the supported region; a frame-space threshold was measured to stay silent in
+  // exactly the tight-shot case it was meant to catch (technical-design-R1 §6.3).
   let warning: string | null = null;
 
-  if (frame && frame.width > 0 && frame.height > 0) {
-    const xs = points.map((p) => p.px);
-    const ys = points.map((p) => p.py);
-    const boxArea = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
-    const covered = boxArea / (frame.width * frame.height);
-    if (covered < 0.08) {
-      warning =
-        "The points you picked cover a small part of the frame, so positions away from them will be less certain.";
-    }
-  }
-
-  if (!warning && verdict === "poor") {
+  if (verdict === "poor") {
     warning =
       "One of these is probably picked in the wrong place — check the outline against the pitch lines.";
+  } else if (pointCount === MIN_POINTS) {
+    // The measured M8 finding, said where it matters: four points are fitted
+    // exactly, so a tiny error is arithmetic rather than evidence. On real data
+    // this is what let a calibration with two clicks in the same place report
+    // 1.4e-10 px and read as "lines up closely".
+    warning =
+      "With four points the fit passes exactly through them, so this error is not evidence that the calibration is right. Add a fifth point to check it.";
   }
 
   return { rmsErrorPx, residualsPx, verdict, warning };

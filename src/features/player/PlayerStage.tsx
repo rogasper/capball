@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import { AnnotationCanvas } from "@/features/annotate/AnnotationCanvas";
 import { CalibrationOverlay } from "@/features/pitch/CalibrationOverlay";
+import { MagnifiedPicker } from "@/features/pitch/MagnifiedPicker";
 import { PositionOverlay } from "@/features/pitch/PositionOverlay";
 import { playback } from "@/lib/playback";
 import { useCalibrationStore } from "@/stores/calibrationStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useMagnifierStore } from "@/stores/magnifierStore";
 import { usePlayerStore } from "@/stores/playerStore";
 import { usePositionStore } from "@/stores/positionStore";
 
@@ -26,6 +28,8 @@ export function PlayerStage() {
   const picking = useCalibrationStore((state) => state.pendingFeature) !== null;
   // Marking takes the clicks too, so the drawing layer stands aside for it.
   const marking = usePositionStore((state) => state.marking);
+  // The magnified view covers the stage when it is open, for either flow.
+  const magnifierMode = useMagnifierStore((state) => state.mode);
   const stageRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -61,6 +65,8 @@ export function PlayerStage() {
       />
       <CalibrationOverlay stageRef={stageRef} videoRef={videoRef} />
       <PositionOverlay stageRef={stageRef} videoRef={videoRef} />
+
+      {playbackUrl && magnifierMode !== null && <MagnifiedPicker mode={magnifierMode} />}
 
       {!playbackUrl && <EmptyStage />}
 

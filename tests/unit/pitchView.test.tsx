@@ -15,6 +15,7 @@ const SIZE = { lengthM: 105, widthM: 68 };
 function position(patch: Partial<PositionRow> = {}): PositionRow {
   return {
     id: 1,
+    uid: "position-1",
     eventId: 7,
     playerId: 11,
     playerName: "Bruno Fernandes",
@@ -101,8 +102,8 @@ describe("PitchView", () => {
       />,
     );
 
-    // The boundary, the halfway line, two areas, two six-yard boxes, two goals,
+    // The boundary, the halfway line, two areas, two six-yard boxes,
     // the centre circle, two arcs and four corner arcs.
-    expect(container.querySelectorAll("path").length).toBeGreaterThanOrEqual(14);
+    expect(container.querySelectorAll("path").length).toBeGreaterThanOrEqual(13);
   });
 });

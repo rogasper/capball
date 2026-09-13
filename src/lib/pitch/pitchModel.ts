@@ -269,6 +269,12 @@ function arcPoints(
  * Circles and arcs are sampled into polylines on purpose: a circle projects to
  * a general conic under a homography, which our primitive set cannot express as
  * an ellipse. A sampled polyline projects exactly, point by point.
+ *
+ * Nothing here is drawn beyond the Laws. Goals used to be sketched two metres
+ * behind the goal line as an orientation cue, but under a projection those
+ * invented boxes read as pitch markings and made a tight calibration look more
+ * broken than it was — the outline now stops at the goal line, where the real
+ * markings stop.
  */
 export function pitchOutline(size: PitchSize): PitchLine[] {
   const { x, y } = half(size);
@@ -277,7 +283,6 @@ export function pitchOutline(size: PitchSize): PitchLine[] {
   const paFront = x - PITCH.penaltyAreaDepth;
   const gaHalf = PITCH.goalAreaWidth / 2;
   const gaFront = x - PITCH.goalAreaDepth;
-  const post = PITCH.goalWidth / 2;
   const circle = PITCH.centreCircleRadius;
 
   const lines: PitchLine[] = [
@@ -329,23 +334,6 @@ export function pitchOutline(size: PitchSize): PitchLine[] {
         [gaFront, -gaHalf],
         [gaFront, gaHalf],
         [x, gaHalf],
-      ],
-    },
-    // Goals, drawn behind the line so the frame is visible.
-    {
-      points: [
-        [-x, -post],
-        [-x - 2, -post],
-        [-x - 2, post],
-        [-x, post],
-      ],
-    },
-    {
-      points: [
-        [x, -post],
-        [x + 2, -post],
-        [x + 2, post],
-        [x, post],
       ],
     },
     // Centre circle and both penalty arcs.

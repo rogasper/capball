@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { StoredCalibration } from "@/lib/db/queries/calibrations";
 import * as calibrationsQuery from "@/lib/db/queries/calibrations";
-import { resolveCalibration, solveHomography } from "@/lib/pitch/homography";
+import { resolveCalibration, solveHomography, worstResidual } from "@/lib/pitch/homography";
 import {
   DEFAULT_PITCH_LENGTH_M,
   DEFAULT_PITCH_WIDTH_M,
@@ -41,6 +41,12 @@ type CalibrationState = {
   pitchWidthM: number;
   /** The feature waiting for a click, or null when not picking. */
   pendingFeature: string | null;
+  /**
+   * Features the user passed over, so the flow stops offering them. Not visible
+   * on the frame is a normal reason to skip a landmark, and without this the
+   * suggested next point would keep coming back to it.
+   */
+  skipped: string[];
   /** The stored calibration being reworked, if any. */
   editingId: number | null;
   error: string | null;
@@ -48,13 +54,21 @@ type CalibrationState = {
   load: (videoId: number, size?: PitchSize) => Promise<void>;
   clear: () => void;
   startPicking: (featureKey: string | null) => void;
+  /** Passes over the feature being offered and moves to the next suggestion. */
+  skipPending: () => void;
   addPick: (imageU: number, imageV: number) => Promise<void>;
+  /** Moves an already-placed pick, for adjusting it against the frame. */
+  movePick: (featureKey: string, imageU: number, imageV: number) => void;
   removePick: (featureKey: string) => void;
   clearPicks: () => void;
   setFromMs: (ms: number) => void;
   setPitchSize: (size: PitchSize) => void;
   edit: (id: number) => void;
-  save: (frame: { width: number; height: number }) => Promise<boolean>;
+  /**
+   * Saves, unless the fit is poor — in which case it refuses and names the point
+   * most likely to be wrong. `force` is the deliberate override the panel offers.
+   */
+  save: (frame: { width: number; height: number }, force?: boolean) => Promise<boolean>;
   remove: (id: number) => Promise<void>;
   reportError: (message: string) => void;
   clearError: () => void;
@@ -62,9 +76,17 @@ type CalibrationState = {
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** The next feature the flow should offer, so the picks stay well spread. */
-export function nextRecommended(usedFeatures: string[]): string | null {
-  return RECOMMENDED_FEATURE_KEYS.find((key) => !usedFeatures.includes(key)) ?? null;
+/**
+ * The next feature the flow should offer, so the picks stay well spread.
+ *
+ * Skips whatever has been picked or passed over; otherwise the suggestion would
+ * loop back to a landmark the user just said they cannot see.
+ */
+export function nextRecommended(usedFeatures: string[], skipped: string[] = []): string | null {
+  return (
+    RECOMMENDED_FEATURE_KEYS.find((key) => !usedFeatures.includes(key) && !skipped.includes(key)) ??
+    null
+  );
 }
 
 /**
@@ -87,7 +109,7 @@ export function solvePicks(
     yM: pick.yM,
   }));
 
-  return solveHomography(points, frame);
+  return solveHomography(points);
 }
 
 export const useCalibrationStore = create<CalibrationState>((set, get) => ({
@@ -98,6 +120,7 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
   pitchLengthM: DEFAULT_PITCH_LENGTH_M,
   pitchWidthM: DEFAULT_PITCH_WIDTH_M,
   pendingFeature: null,
+  skipped: [],
   editingId: null,
   error: null,
 
@@ -110,6 +133,7 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
         picks: [],
         editingId: null,
         pendingFeature: null,
+        skipped: [],
         fromMs: 0,
         pitchLengthM: size?.lengthM ?? get().pitchLengthM ?? DEFAULT_PITCH_LENGTH_M,
         pitchWidthM: size?.widthM ?? get().pitchWidthM ?? DEFAULT_PITCH_WIDTH_M,
@@ -126,6 +150,7 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
       calibrations: [],
       picks: [],
       pendingFeature: null,
+      skipped: [],
       editingId: null,
       fromMs: 0,
       error: null,
@@ -134,8 +159,20 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
 
   startPicking(featureKey) {
     const state = get();
-    const key = featureKey ?? nextRecommended(state.picks.map((pick) => pick.feature));
+    const key =
+      featureKey ??
+      nextRecommended(
+        state.picks.map((pick) => pick.feature),
+        state.skipped,
+      );
     set({ pendingFeature: key, error: null });
+  },
+
+  skipPending() {
+    const state = get();
+    const skipped = state.pendingFeature ? [...state.skipped, state.pendingFeature] : state.skipped;
+    const used = state.picks.map((pick) => pick.feature);
+    set({ skipped, pendingFeature: nextRecommended(used, skipped), error: null });
   },
 
   async addPick(imageU, imageV) {
@@ -152,7 +189,21 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
     const pick: Pick = { feature: key, imageU, imageV, xM: feature.x, yM: feature.y };
     // Picking the same feature twice replaces it rather than duplicating it.
     const picks = [...state.picks.filter((existing) => existing.feature !== key), pick];
-    set({ picks, pendingFeature: nextRecommended(picks.map((p) => p.feature)), error: null });
+    set({
+      picks,
+      // Placing a point clears the skips: the set has moved on, and a landmark
+      // passed over earlier may be worth offering again.
+      skipped: [],
+      pendingFeature: nextRecommended(picks.map((p) => p.feature)),
+      error: null,
+    });
+  },
+
+  movePick(featureKey, imageU, imageV) {
+    const picks = get().picks.map((pick) =>
+      pick.feature === featureKey ? { ...pick, imageU, imageV } : pick,
+    );
+    set({ picks, error: null });
   },
 
   removePick(feature) {
@@ -161,7 +212,13 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
   },
 
   clearPicks() {
-    set({ picks: [], pendingFeature: nextRecommended([]), editingId: null, error: null });
+    set({
+      picks: [],
+      pendingFeature: nextRecommended([]),
+      skipped: [],
+      editingId: null,
+      error: null,
+    });
   },
 
   setFromMs(ms) {
@@ -183,11 +240,12 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
       pitchWidthM: stored.pitchWidthM,
       editingId: id,
       pendingFeature: null,
+      skipped: [],
       error: null,
     });
   },
 
-  async save(frame) {
+  async save(frame, force = false) {
     const state = get();
     if (state.videoId === null) return false;
 
@@ -197,7 +255,37 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
       return false;
     }
     if (!outcome.ok) {
-      set({ error: outcome.reason });
+      // Name the features the failure points at rather than printing indices.
+      const size = { lengthM: state.pitchLengthM, widthM: state.pitchWidthM };
+      const suspects = (outcome.suspectIndices ?? [])
+        .map((index) => {
+          const pick = state.picks[index];
+          if (!pick) return null;
+          return findFeature(size, pick.feature)?.label ?? pick.feature;
+        })
+        .filter((label): label is string => label !== null);
+
+      set({
+        error:
+          suspects.length > 0
+            ? `${outcome.reason} Check “${suspects.join("” and “")}”.`
+            : outcome.reason,
+      });
+      return false;
+    }
+
+    // A fit outside the accepted band is refused by the ordinary path, and the
+    // point most likely to be wrong is named. The panel offers a deliberate
+    // override, because a user looking at the frame knows more than the residual
+    // does — but they have to say so.
+    if (outcome.quality.verdict === "poor" && !force) {
+      const size = { lengthM: state.pitchLengthM, widthM: state.pitchWidthM };
+      const worst = worstResidual(outcome.quality.residualsPx);
+      const suspect = worst ? state.picks[worst.index]?.feature : undefined;
+      const label = (suspect && findFeature(size, suspect)?.label) ?? suspect ?? "one point";
+      set({
+        error: `This fit is ${outcome.quality.rmsErrorPx.toFixed(1)} px off, which is outside the band. “${label}” is the most likely mis-pick (${worst?.px.toFixed(1) ?? "?"} px). Check or remove that point, or save it anyway.`,
+      });
       return false;
     }
 

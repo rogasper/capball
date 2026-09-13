@@ -75,6 +75,7 @@ beforeEach(() => {
     pitchLengthM: 105,
     pitchWidthM: 68,
     pendingFeature: null,
+    skipped: [],
     editingId: null,
     error: null,
   });
@@ -101,6 +102,11 @@ describe("nextRecommended", () => {
       "halfway-bottom",
     ];
     expect(nextRecommended(all)).toBeNull();
+  });
+
+  it("does not offer a landmark the user passed over", () => {
+    expect(nextRecommended([], ["centre-spot"])).toBe("left-penalty-spot");
+    expect(nextRecommended([], ["centre-spot", "left-penalty-spot"])).toBe("right-penalty-spot");
   });
 });
 
@@ -138,6 +144,50 @@ describe("picking", () => {
     useCalibrationStore.getState().removePick("centre-spot");
 
     expect(useCalibrationStore.getState().picks).toEqual([]);
+    expect(useCalibrationStore.getState().pendingFeature).toBe("centre-spot");
+  });
+
+  it("moves a placed point without changing which feature it is", async () => {
+    await useCalibrationStore.getState().load(7);
+    await pickFeatures(["centre-spot"]);
+
+    useCalibrationStore.getState().movePick("centre-spot", 0.42, 0.58);
+
+    expect(useCalibrationStore.getState().picks[0]).toMatchObject({
+      feature: "centre-spot",
+      xM: 0,
+      yM: 0,
+      imageU: 0.42,
+      imageV: 0.58,
+    });
+  });
+});
+
+describe("skipping a landmark that is not visible", () => {
+  it("passes over the offered point and moves on, picking nothing", () => {
+    useCalibrationStore.getState().startPicking(null);
+    expect(useCalibrationStore.getState().pendingFeature).toBe("centre-spot");
+
+    useCalibrationStore.getState().skipPending();
+    expect(useCalibrationStore.getState().pendingFeature).toBe("left-penalty-spot");
+
+    useCalibrationStore.getState().skipPending();
+    expect(useCalibrationStore.getState().pendingFeature).toBe("right-penalty-spot");
+    expect(useCalibrationStore.getState().picks).toEqual([]);
+  });
+
+  it("offers a skipped landmark again once a point is actually placed", async () => {
+    await useCalibrationStore.getState().load(7);
+    useCalibrationStore.getState().startPicking(null);
+    useCalibrationStore.getState().skipPending();
+
+    // Placing the offered point moves the set on, so the earlier skip is dropped.
+    const { findFeature } = await import("@/lib/pitch/pitchModel");
+    const feature = findFeature({ lengthM: 105, widthM: 68 }, "left-penalty-spot");
+    if (!feature) throw new Error("no feature");
+    const { px, py } = pixelsFor(feature.x, feature.y);
+    await useCalibrationStore.getState().addPick(px / FRAME.width, py / FRAME.height);
+
     expect(useCalibrationStore.getState().pendingFeature).toBe("centre-spot");
   });
 });
@@ -194,6 +244,42 @@ describe("saving", () => {
     expect(await useCalibrationStore.getState().save(FRAME)).toBe(false);
     expect(useCalibrationStore.getState().error).toMatch(/at least 4/i);
     expect(saveCalibration).not.toHaveBeenCalled();
+  });
+
+  it("refuses a poor fit by default and names the point most likely wrong", async () => {
+    await useCalibrationStore.getState().load(7);
+    await pickFeatures([
+      "centre-spot",
+      "left-penalty-spot",
+      "right-penalty-spot",
+      "left-pa-front-top",
+      "right-pa-front-bottom",
+      "corner-left-top",
+      "corner-right-bottom",
+    ]);
+
+    // Knock one pick well off its landmark, the way a mis-click does.
+    useCalibrationStore.setState({
+      picks: useCalibrationStore
+        .getState()
+        .picks.map((pick) =>
+          pick.feature === "left-pa-front-top"
+            ? { ...pick, imageU: pick.imageU + 0.12, imageV: pick.imageV - 0.09 }
+            : pick,
+        ),
+    });
+
+    expect(await useCalibrationStore.getState().save(FRAME)).toBe(false);
+    expect(useCalibrationStore.getState().error).toMatch(/outside the band/i);
+    // The point named is the one that was knocked off, by its label.
+    expect(useCalibrationStore.getState().error).toMatch(/Left area, top corner/);
+    expect(saveCalibration).not.toHaveBeenCalled();
+
+    // The deliberate override writes it, because a person looking at the frame
+    // knows more than the residual does.
+    listCalibrations.mockResolvedValue([stored()]);
+    expect(await useCalibrationStore.getState().save(FRAME, true)).toBe(true);
+    expect(saveCalibration).toHaveBeenCalled();
   });
 
   it("writes the picks with the solved error, then reloads", async () => {

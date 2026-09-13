@@ -3,12 +3,14 @@ import {
   applyHomography,
   invertHomography,
   MIN_POINTS,
+  nearDuplicatePicks,
   projectToImage,
   RMS_ACCEPTABLE_PX,
   RMS_GOOD_PX,
   residualsPx,
   resolveCalibration,
   solveHomography,
+  worstResidual,
 } from "@/lib/pitch/homography";
 import { findFeature, pitchFeatures } from "@/lib/pitch/pitchModel";
 import type { Correspondence } from "@/lib/pitch/types";
@@ -21,7 +23,6 @@ import type { Correspondence } from "@/lib/pitch/types";
  * whole pitch fits (x ±52.5 → 540..1380, y ±34 → 268..812), so a correct solve
  * must reproduce held-out points to within floating-point noise.
  */
-const FRAME = { width: 1920, height: 1080 };
 const PX_PER_M = 8;
 
 function camera(xM: number, yM: number) {
@@ -48,7 +49,7 @@ const SPREAD_KEYS = [
 
 describe("solveHomography", () => {
   it("recovers a camera from six points and reports a clean fit", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS));
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -58,7 +59,7 @@ describe("solveHomography", () => {
   });
 
   it("maps held-out points correctly, so it learned the camera rather than the points", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -81,7 +82,6 @@ describe("solveHomography", () => {
         "right-pa-front-top",
         "corner-left-bottom",
       ]),
-      FRAME,
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -94,7 +94,6 @@ describe("solveHomography", () => {
     // mathematically not enough.
     const result = solveHomography(
       fromFeatures(["centre-spot", "left-penalty-spot", "right-penalty-spot", "corner-left-top"]),
-      FRAME,
     );
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -104,12 +103,12 @@ describe("solveHomography", () => {
   it("accepts the same three in a line once the set is larger than four", () => {
     // Six points already include that collinear trio; over-determination makes
     // it harmless, which is why the check above only fires at exactly four.
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS));
     expect(result.ok).toBe(true);
   });
 
   it("refuses fewer than four points, saying how many it needs", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS.slice(0, 3)), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS.slice(0, 3)));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toContain(String(MIN_POINTS));
@@ -122,7 +121,7 @@ describe("solveHomography", () => {
       { px: 500, py: 300, xM: 20, yM: -10 },
       { px: 900, py: 300, xM: 40, yM: 30 },
     ];
-    const result = solveHomography(line, FRAME);
+    const result = solveHomography(line);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toMatch(/line/i);
@@ -145,7 +144,7 @@ describe("solveHomography", () => {
       py: points[badIndex].py - 180,
     };
 
-    const result = solveHomography(points, FRAME);
+    const result = solveHomography(points);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -167,8 +166,8 @@ describe("solveHomography", () => {
         py: point.py + (index % 3 === 0 ? amount : -amount),
       }));
 
-    const slight = solveHomography(jitter(base, 1), FRAME);
-    const heavy = solveHomography(jitter(base, 12), FRAME);
+    const slight = solveHomography(jitter(base, 1));
+    const heavy = solveHomography(jitter(base, 12));
 
     expect(slight.ok && heavy.ok).toBe(true);
     if (!slight.ok || !heavy.ok) return;
@@ -180,15 +179,63 @@ describe("solveHomography", () => {
     expect(heavy.quality.verdict).toBe("poor");
   });
 
-  it("warns when the picks cover too little of the frame", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), { width: 19_200, height: 10_800 });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.quality.warning).toMatch(/small part of the frame/i);
+  it("names the worst-residual point, which is what a poor fit is refused on", () => {
+    // Coverage is deliberately not judged here: frame-space coverage stayed
+    // silent in the tight-shot case it existed for, so pitch coverage lives in
+    // `lib/pitch/positions.ts` and is tested there.
+    expect(worstResidual([1.2, 0.4, 9.8, 2.1])).toEqual({ index: 2, px: 9.8 });
+    expect(worstResidual([])).toBeNull();
+  });
+
+  it("refuses two clicks in the same place, which a four-point fit would hide", () => {
+    // Taken from the owner's real library: "centre circle, left" and "left
+    // penalty spot" — 32 m apart on the pitch — were clicked 1.2 px apart, and
+    // the four-point fit reported 1.4e-10 px. Four points always fit exactly, so
+    // the residual cannot catch this; the duplicate check must.
+    const points = fromFeatures([
+      "centre-spot",
+      "left-penalty-spot",
+      "left-ga-front-top",
+      "left-pa-front-top",
+    ]);
+    const collision = points[1];
+    points[0] = { ...points[0], px: collision.px + 0.19, py: collision.py + 1.2 };
+
+    const result = solveHomography(points);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/same click|same place/i);
+    expect(result.suspectIndices).toEqual([0, 1]);
+  });
+
+  it("does not mistake a genuinely tight pick set for one click", () => {
+    // Two landmarks can be close in the image under foreshortening; the check is
+    // about a pair that is close *relative to the spread of the picks*.
+    expect(nearDuplicatePicks(fromFeatures(SPREAD_KEYS))).toBeNull();
+  });
+
+  it("says a four-point fit's error is not evidence, and stops saying it at five", () => {
+    const four = solveHomography(
+      fromFeatures([
+        "centre-spot",
+        "left-penalty-spot",
+        "right-pa-front-top",
+        "corner-left-bottom",
+      ]),
+    );
+    expect(four.ok).toBe(true);
+    if (!four.ok) return;
+    expect(four.quality.rmsErrorPx).toBeLessThan(1e-6);
+    expect(four.quality.warning).toMatch(/not evidence/i);
+
+    const five = solveHomography(fromFeatures(SPREAD_KEYS));
+    expect(five.ok).toBe(true);
+    if (!five.ok) return;
+    expect(five.quality.warning).toBeNull();
   });
 
   it("does not claim a good fit when there is no warning to give", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.quality.warning).toBeNull();
@@ -197,7 +244,7 @@ describe("solveHomography", () => {
 
 describe("projection", () => {
   it("inverts itself", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -215,7 +262,7 @@ describe("projection", () => {
   });
 
   it("round-trips a pixel through the pitch and back", () => {
-    const result = solveHomography(fromFeatures(SPREAD_KEYS), FRAME);
+    const result = solveHomography(fromFeatures(SPREAD_KEYS));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -227,7 +274,7 @@ describe("projection", () => {
 
   it("measures each point's own error", () => {
     const points = fromFeatures(SPREAD_KEYS);
-    const result = solveHomography(points, FRAME);
+    const result = solveHomography(points);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 

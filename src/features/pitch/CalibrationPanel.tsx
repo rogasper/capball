@@ -1,3 +1,4 @@
+import { Maximize2 } from "lucide-react";
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,10 +12,18 @@ import {
 } from "@/components/ui/select";
 import { RMS_ACCEPTABLE_PX, RMS_GOOD_PX } from "@/lib/pitch/homography";
 import { findFeature, pitchFeatures } from "@/lib/pitch/pitchModel";
+import {
+  describeCoverage,
+  isNarrowCoverage,
+  regionOf,
+  storedCalibrationWarning,
+} from "@/lib/pitch/positions";
 import { playback } from "@/lib/playback";
 import { formatTimecode } from "@/lib/time/timecode";
+import { cn } from "@/lib/utils";
 import { solvePicks, useCalibrationStore } from "@/stores/calibrationStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useMagnifierStore } from "@/stores/magnifierStore";
 
 /**
  * Calibrating a video, in plain language (FR-30.1, FR-30.2, NFR-26).
@@ -42,6 +51,10 @@ export function CalibrationPanel() {
   const error = useCalibrationStore((state) => state.error);
 
   const startPicking = useCalibrationStore((state) => state.startPicking);
+  const skipPending = useCalibrationStore((state) => state.skipPending);
+  const magnifierMode = useMagnifierStore((state) => state.mode);
+  const openMagnifier = useMagnifierStore((state) => state.open);
+  const closeMagnifier = useMagnifierStore((state) => state.close);
   const removePick = useCalibrationStore((state) => state.removePick);
   const clearPicks = useCalibrationStore((state) => state.clearPicks);
   const setFromMs = useCalibrationStore((state) => state.setFromMs);
@@ -66,6 +79,12 @@ export function CalibrationPanel() {
     () => (solvable ? solvePicks(picks, frame) : null),
     [picks, frame, solvable],
   );
+
+  // Coverage is a question about the pitch, not the frame: how much of the
+  // playing surface the picks actually constrain. It is what tells the user
+  // whether the outline they are looking at is mostly measurement or mostly
+  // extrapolation — see `isNarrowCoverage`.
+  const coverage = useMemo(() => (picks.length >= 3 ? regionOf(picks, size) : null), [picks, size]);
 
   if (videoId === null) {
     return (
@@ -93,35 +112,39 @@ export function CalibrationPanel() {
         <section className="space-y-2">
           <h3 className="text-label text-muted-foreground">Calibrations on this video</h3>
           <ul className="space-y-1">
-            {calibrations.map((calibration) => (
-              <li
-                key={calibration.id}
-                className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-label">
-                    {calibration.fromMs === 0
-                      ? "From the start"
-                      : `From ${formatTimecode(calibration.fromMs)}`}
-                  </p>
-                  <p className="text-caption text-muted-foreground">
-                    {calibration.points.length} points · lines up{" "}
-                    {verdictText(calibration.rmsErrorPx)} ({calibration.rmsErrorPx.toFixed(1)} px)
-                  </p>
-                </div>
-                <Button variant="ghost" size="xs" onClick={() => edit(calibration.id)}>
-                  Adjust
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  aria-label={`Delete the calibration from ${formatTimecode(calibration.fromMs)}`}
-                  onClick={() => void remove(calibration.id)}
+            {calibrations.map((calibration) => {
+              const flaw = storedCalibrationWarning(calibration.points, frame);
+              return (
+                <li
+                  key={calibration.id}
+                  className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
                 >
-                  Delete
-                </Button>
-              </li>
-            ))}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-label">
+                      {calibration.fromMs === 0
+                        ? "From the start"
+                        : `From ${formatTimecode(calibration.fromMs)}`}
+                    </p>
+                    <p className="text-caption text-muted-foreground">
+                      {calibration.points.length} points · lines up{" "}
+                      {verdictText(calibration.rmsErrorPx)} ({calibration.rmsErrorPx.toFixed(1)} px)
+                    </p>
+                    {flaw && <p className="text-caption text-warning">{flaw}</p>}
+                  </div>
+                  <Button variant="ghost" size="xs" onClick={() => edit(calibration.id)}>
+                    Adjust
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-label={`Delete the calibration from ${formatTimecode(calibration.fromMs)}`}
+                    onClick={() => void remove(calibration.id)}
+                  >
+                    Delete
+                  </Button>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
@@ -164,20 +187,41 @@ export function CalibrationPanel() {
               ))}
             </SelectContent>
           </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => startPicking(null)}
-            disabled={pendingFeature === null}
-          >
-            Next point
-          </Button>
+          {pendingFeature === null ? (
+            <Button variant="outline" size="sm" onClick={() => startPicking(null)}>
+              Suggest one
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Not visible in this frame"
+              onClick={skipPending}
+            >
+              Skip this one
+            </Button>
+          )}
         </div>
+
+        <Button
+          variant={magnifierMode === "calibration" ? "default" : "outline"}
+          size="sm"
+          className="w-full"
+          onClick={() =>
+            magnifierMode === "calibration" ? closeMagnifier() : openMagnifier("calibration")
+          }
+        >
+          <Maximize2 className="size-3.5" aria-hidden="true" />
+          {magnifierMode === "calibration"
+            ? "Close the magnified frame"
+            : "Pick on a magnified frame"}
+        </Button>
 
         {pendingFeature !== null && (
           <p className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-label">
             Click <strong>{findFeature(size, pendingFeature)?.label ?? pendingFeature}</strong> on
-            the frame. Press “Next point” when you are done.
+            the frame or in the magnified view. Any feature can be chosen from the list, and “Skip
+            this one” passes over one that is not visible.
           </p>
         )}
 
@@ -186,10 +230,18 @@ export function CalibrationPanel() {
             {picks.map((pick, index) => {
               const residual =
                 outcome?.ok === true ? outcome.quality.residualsPx[index] : undefined;
+              // The solver names the picks a failure points at, so the suspect
+              // rows are marked rather than described.
+              const suspect =
+                outcome?.ok === false && (outcome.suspectIndices ?? []).includes(index);
               return (
-                <li key={pick.feature} className="flex items-center gap-2 text-label">
+                <li
+                  key={pick.feature}
+                  className={cn("flex items-center gap-2 text-label", suspect && "text-danger")}
+                >
                   <span className="min-w-0 flex-1 truncate">
                     {findFeature(size, pick.feature)?.label ?? pick.feature}
+                    {suspect && <span className="text-caption"> · check this one</span>}
                   </span>
                   {residual !== undefined && (
                     <span className="tabular-nums text-caption text-muted-foreground">
@@ -210,7 +262,13 @@ export function CalibrationPanel() {
           </ul>
         )}
 
-        {outcome && !outcome.ok && <p className="text-label text-danger">{outcome.reason}</p>}
+        {outcome && !outcome.ok && (
+          <p className="text-label text-danger">
+            {outcome.reason}
+            {(outcome.suspectIndices ?? []).length > 0 &&
+              " The marked points above are the suspects."}
+          </p>
+        )}
 
         {outcome?.ok === true && (
           <div className="space-y-1">
@@ -220,15 +278,31 @@ export function CalibrationPanel() {
               average error.
             </p>
             {outcome.quality.warning && (
-              <p className="text-label text-muted-foreground">{outcome.quality.warning}</p>
+              <p className="text-label text-warning">{outcome.quality.warning}</p>
             )}
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        {coverage && (
+          <p
+            className={cn(
+              "text-label",
+              isNarrowCoverage(coverage) ? "text-warning" : "text-muted-foreground",
+            )}
+          >
+            {describeCoverage(coverage)}
+          </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
           <Button size="xs" disabled={!outcome?.ok} onClick={() => void save(frame)}>
             {editingId === null ? "Save calibration" : "Save changes"}
           </Button>
+          {outcome?.ok === true && outcome.quality.verdict === "poor" && (
+            <Button variant="outline" size="xs" onClick={() => void save(frame, true)}>
+              Save anyway
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="xs"

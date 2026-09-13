@@ -31,7 +31,15 @@ export type Quality = {
 
 export type SolveOutcome =
   | { ok: true; h: Homography; quality: Quality }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /**
+       * The picks the failure points at, by index into the points given to the
+       * solve. Lets the UI name a feature rather than a number.
+       */
+      suspectIndices?: number[];
+    };
 
 /** A calibration as the app holds it, before it has a database id. */
 export type CalibrationDraft = {
