@@ -24,6 +24,7 @@ type ExportOptions = Pick<
   | "exportExtraBeforeMs"
   | "exportExtraAfterMs"
   | "exportConcatenate"
+  | "exportAnnotations"
 >;
 
 type AnnotationDefaults = Pick<SettingsValues, "annotationWindowMs" | "annotationStyle">;
@@ -32,6 +33,9 @@ type SettingsState = SettingsValues & {
   tools: ToolStatus | null;
   loaded: boolean;
   error: string | null;
+  /** What the last cache cleanup did, or why it could not run (NFR-22). */
+  cacheNote: string | null;
+  cacheError: string | null;
 
   load: () => Promise<void>;
   setPreRollMs: (ms: number) => void;
@@ -40,6 +44,8 @@ type SettingsState = SettingsValues & {
   setAnnotationDefaults: (patch: Partial<AnnotationDefaults>) => void;
   reset: () => void;
   setTools: (tools: ToolStatus) => void;
+  reportCache: (note: string) => void;
+  reportCacheError: (message: string) => void;
   reportError: (message: string) => void;
   clearError: () => void;
 };
@@ -60,6 +66,8 @@ export const useSettingsStore = create<SettingsState>((set) => {
     tools: null,
     loaded: false,
     error: null,
+    cacheNote: null,
+    cacheError: null,
 
     async load() {
       try {
@@ -104,6 +112,14 @@ export const useSettingsStore = create<SettingsState>((set) => {
 
     setTools(tools) {
       set({ tools });
+    },
+
+    reportCache(note) {
+      set({ cacheNote: note, cacheError: null });
+    },
+
+    reportCacheError(message) {
+      set({ cacheError: message });
     },
 
     reportError(message) {

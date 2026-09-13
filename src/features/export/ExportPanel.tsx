@@ -102,6 +102,7 @@ export function ExportPanel() {
   const extraBeforeMs = useSettingsStore((state) => state.exportExtraBeforeMs);
   const extraAfterMs = useSettingsStore((state) => state.exportExtraAfterMs);
   const concatenate = useSettingsStore((state) => state.exportConcatenate);
+  const burnIn = useSettingsStore((state) => state.exportAnnotations);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const settingsError = useSettingsStore((state) => state.error);
   const phase = useExportStore((state) => state.phase);
@@ -286,6 +287,24 @@ export function ExportPanel() {
         Also join them into one file, in order
       </label>
 
+      <label className="flex items-start gap-2 text-body">
+        <input
+          type="checkbox"
+          checked={burnIn}
+          onChange={(event) => setOptions({ exportAnnotations: event.currentTarget.checked })}
+          className="mt-0.5 size-3.5 accent-[var(--primary)]"
+        />
+        <span>
+          Burn the drawings into the clips
+          <span className="mt-0.5 block text-caption text-muted-foreground">
+            Each drawn shape is rendered into its clip at the moment it was on screen. Carrying
+            drawings means re-encoding the picture, so a clip with them takes as long as an{" "}
+            <strong>accurate</strong> cut — a lot slower than a fast one. Clips whose events have no
+            drawings are untouched.
+          </span>
+        </span>
+      </label>
+
       {problems.length > 0 && (
         <ul role="alert" className="space-y-1 rounded-lg border border-danger/40 bg-danger/10 p-2">
           {problems.map((problem) => (
@@ -330,6 +349,7 @@ export function ExportPanel() {
               },
               durationMs: video?.durationMs ?? 0,
               sourcePath,
+              exportSize: { width: video?.width ?? 0, height: video?.height ?? 0 },
             })
           }
         >

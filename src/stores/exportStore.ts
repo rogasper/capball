@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { listAnnotations } from "@/lib/db/queries/annotations";
 import type { EventRow } from "@/lib/db/queries/events";
 import {
   describeConflicts,
@@ -6,8 +7,10 @@ import {
   planNames,
   renderFilename,
 } from "@/lib/export/filename";
-import { ipc } from "@/lib/ipc";
+import { buildOverlayPlan, enableExpression } from "@/lib/export/overlay";
+import { type ExportMode, ipc } from "@/lib/ipc";
 import { awaitJob } from "@/lib/jobs/jobEvents";
+import { renderOverlayPng } from "@/lib/render/burnIn";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
@@ -42,6 +45,8 @@ type ExportState = {
     context: NamingContext;
     durationMs: number;
     sourcePath: string | null;
+    /** The output video's pixel size, for rasterising the drawings (FR-40.1). */
+    exportSize: { width: number; height: number };
   }) => Promise<void>;
   cancel: () => Promise<void>;
   reset: () => void;
@@ -84,7 +89,7 @@ export function paddedRange(
 export const useExportStore = create<ExportState>((set, get) => ({
   ...IDLE,
 
-  async run({ events, context, durationMs, sourcePath }) {
+  async run({ events, context, durationMs, sourcePath, exportSize }) {
     const {
       exportDestination: destination,
       exportTemplate: template,
@@ -92,6 +97,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
       exportExtraBeforeMs: extraBeforeMs,
       exportExtraAfterMs: extraAfterMs,
       exportConcatenate: concatenate,
+      exportAnnotations: burnIn,
     } = useSettingsStore.getState();
 
     if (!sourcePath) {
@@ -104,6 +110,14 @@ export const useExportStore = create<ExportState>((set, get) => ({
     }
     if (events.length === 0) {
       set({ ...IDLE, phase: "error", error: "Select at least one event to export." });
+      return;
+    }
+    if (burnIn && (exportSize.width <= 0 || exportSize.height <= 0)) {
+      set({
+        ...IDLE,
+        phase: "error",
+        error: "The video's size is not known yet, so its drawings cannot be rendered.",
+      });
       return;
     }
 
@@ -164,7 +178,50 @@ export const useExportStore = create<ExportState>((set, get) => ({
         const output = joinPath(destination, item.fileName);
         set({ currentLabel: item.fileName, stepProgress: 0 });
 
-        const job = await ipc.startExport(sourcePath, output, range.startMs, range.endMs, mode);
+        // The drawings are rasterised here, at the export resolution, by the
+        // same renderer the preview uses. An event with no drawings produces no
+        // overlays at all, so its clip is byte-for-byte what it was before.
+        const overlays: { path: string; enable: string }[] = [];
+        let effectiveMode: ExportMode = mode;
+
+        if (burnIn) {
+          const annotations = await listAnnotations(event.id);
+          if (annotations.length > 0) {
+            const plan = buildOverlayPlan(annotations, {
+              anchorMs: event.anchorMs,
+              eventStartMs: event.startMs,
+              eventEndMs: event.endMs,
+              durationMs,
+              clipStartMs: range.startMs,
+              clipEndMs: range.endMs,
+            });
+
+            for (const [intervalIndex, interval] of plan.intervals.entries()) {
+              const dataUrl = renderOverlayPng({
+                annotations: interval.annotations,
+                width: exportSize.width,
+                height: exportSize.height,
+              });
+              const path = await ipc.writeOverlayPng(`clip-${event.id}-${intervalIndex}`, dataUrl);
+              overlays.push({
+                path,
+                enable: enableExpression(interval.startMs, interval.endMs),
+              });
+            }
+
+            // Overlaying is a filter, so the video stream cannot be copied (D22).
+            if (overlays.length > 0) effectiveMode = "accurate";
+          }
+        }
+
+        const job = await ipc.startExport(
+          sourcePath,
+          output,
+          range.startMs,
+          range.endMs,
+          effectiveMode,
+          overlays,
+        );
         set({ activeJobId: job.jobId });
 
         const result = await awaitJob(job.jobId, (progress) =>

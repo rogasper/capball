@@ -37,6 +37,7 @@ describe("decodeSettings", () => {
       exportExtraBeforeMs: 2_000,
       exportExtraAfterMs: 1_000,
       exportConcatenate: true,
+      exportAnnotations: false,
       annotationWindowMs: 3_000,
       pitchLengthM: 100,
       pitchWidthM: 64,

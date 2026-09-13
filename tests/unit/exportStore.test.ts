@@ -81,6 +81,7 @@ const runInput = {
   context,
   durationMs: 861_737,
   sourcePath: "/matches/mu_vs_sabah.mp4",
+  exportSize: { width: 1920, height: 1080 },
 };
 
 function done(jobId: string): JobEvent {
@@ -125,7 +126,7 @@ describe("export batch", () => {
 
     await useExportStore.getState().run(runInput);
 
-    expect(startExport.mock.calls[0]?.slice(2)).toEqual([77_701, 97_701, "fast"]);
+    expect(startExport.mock.calls[0]?.slice(2)).toEqual([77_701, 97_701, "fast", []]);
   });
 
   it("adds padding on request", async () => {
@@ -134,7 +135,7 @@ describe("export batch", () => {
 
     await useExportStore.getState().run(runInput);
 
-    expect(startExport.mock.calls[0]?.slice(2)).toEqual([75_701, 100_701, "fast"]);
+    expect(startExport.mock.calls[0]?.slice(2)).toEqual([75_701, 100_701, "fast", []]);
   });
 
   it("refuses before writing anything when a file is already there", async () => {
