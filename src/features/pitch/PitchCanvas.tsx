@@ -25,6 +25,7 @@ import { useAnnotationStore } from "@/stores/annotationStore";
 import { activeCalibrationAt, useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { Pitch3D } from "./Pitch3D";
 import { PitchView, type PitchViewSet } from "./PitchView";
 
 /**
@@ -86,6 +87,15 @@ export function PitchCanvas({
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  /**
+   * Which renderer draws this diagram.
+   *
+   * The tools, the gestures and the captions are the surface's; only the drawing
+   * of the pitch changes, which is the point of keeping one pitch-space model and
+   * two renderers (D34/D36). Reshaping a corner stays top-down, because a grip
+   * drag needs a linear pixel-to-metre mapping.
+   */
+  const [view, setView] = useState<"top" | "angled">("top");
   const dragRef = useRef<Drag | null>(null);
 
   const eventId = useAnnotationStore((state) => state.eventId);
@@ -433,6 +443,25 @@ export function PitchCanvas({
 
   return (
     <div className="space-y-2">
+      <div className="flex items-center gap-1">
+        <Button
+          variant={view === "top" ? "default" : "outline"}
+          size="xs"
+          aria-pressed={view === "top"}
+          onClick={() => setView("top")}
+        >
+          Top-down
+        </Button>
+        <Button
+          variant={view === "angled" ? "default" : "outline"}
+          size="xs"
+          aria-pressed={view === "angled"}
+          onClick={() => setView("angled")}
+        >
+          Angled
+        </Button>
+      </div>
+
       {frameDrawings > 0 && (
         <p className="rounded-md border border-border bg-muted px-2 py-1.5 text-caption text-muted-foreground">
           {frameDrawings === 1
@@ -508,109 +537,110 @@ export function PitchCanvas({
         </>
       )}
 
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: the handlers only
-          translate pointer positions into metres. The labelled surface is the SVG
-          inside, the tools above are ordinary buttons, and every drawn shape is
-          also listed and editable in the Layers panel. */}
-      <div
-        ref={wrapRef}
-        className={
-          tool !== null && tool !== "text" && tool !== "freehand"
-            ? "relative cursor-crosshair"
-            : "relative"
-        }
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onDoubleClick={onDoubleClick}
-      >
-        <PitchView
-          size={size}
-          sets={sets}
-          shapes={shapes}
-          draft={draftShape}
-          draftPoints={draftPoints ?? []}
-          emptyMessage={emptyMessage}
-          svgRef={svgRef}
-          drawing={tool !== null}
-        />
+      {view === "angled" ? (
+        <Pitch3D size={size} positions={sets[0]?.positions ?? []} emptyMessage={emptyMessage} />
+      ) : (
+        // biome-ignore lint/a11y/noStaticElementInteractions: the handlers only turn pointer positions into metres; the labelled surface is the SVG inside, and every shape is listed and editable in the Layers panel.
+        <div
+          ref={wrapRef}
+          className={
+            tool !== null && tool !== "text" && tool !== "freehand"
+              ? "relative cursor-crosshair"
+              : "relative"
+          }
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onDoubleClick={onDoubleClick}
+        >
+          <PitchView
+            size={size}
+            sets={sets}
+            shapes={shapes}
+            draft={draftShape}
+            draftPoints={draftPoints ?? []}
+            emptyMessage={emptyMessage}
+            svgRef={svgRef}
+            drawing={tool !== null}
+          />
 
-        {/* The grips are DOM, like the frame canvas's, so they can never end up
+          {/* The grips are DOM, like the frame canvas's, so they can never end up
             in an exported clip. They sit at the same metre-to-pixel positions the
             drags compute from, because both use `pitchRect`. */}
-        {tool === null && selected && pitchRect && (
-          <div className="pointer-events-none absolute inset-0">
-            {handlesFor(selected, pitchRect).map((handle) => {
-              const addIndex = midpointIndexOf(handle.name);
-              const removeIndex = removableVertexFor(handle.name, selected);
-              const label = handleLabel(handle.name, selected);
-              const gripSize = addIndex !== null ? 6 : 9;
+          {tool === null && selected && pitchRect && (
+            <div className="pointer-events-none absolute inset-0">
+              {handlesFor(selected, pitchRect).map((handle) => {
+                const addIndex = midpointIndexOf(handle.name);
+                const removeIndex = removableVertexFor(handle.name, selected);
+                const label = handleLabel(handle.name, selected);
+                const gripSize = addIndex !== null ? 6 : 9;
 
-              return (
-                <button
-                  key={handle.name}
-                  type="button"
-                  aria-label={label}
-                  title={label}
-                  className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded-full border ${
-                    addIndex !== null
-                      ? "border-dashed border-primary/70 bg-background"
-                      : "border-white bg-primary"
-                  }`}
-                  style={{
-                    left: handle.point[0],
-                    top: handle.point[1],
-                    width: gripSize,
-                    height: gripSize,
-                  }}
-                  onPointerDown={(gripEvent) => {
-                    gripEvent.stopPropagation();
-                    if (addIndex !== null) return;
-                    const vertex = vertexIndexOf(handle.name);
-                    const store = useAnnotationStore.getState();
-                    store.beginDrag();
-                    dragRef.current =
-                      vertex !== null
-                        ? { mode: "vertex", index: vertex }
-                        : handle.name === "rotate"
-                          ? { mode: "rotate", handle: "rotate" }
-                          : { mode: "resize", handle: handle.name };
-                    wrapRef.current?.setPointerCapture(gripEvent.pointerId);
-                  }}
-                  onClick={
-                    addIndex === null
-                      ? undefined
-                      : (clickEvent) => {
-                          clickEvent.stopPropagation();
-                          void useAnnotationStore.getState().insertVertexAfter(addIndex);
-                        }
-                  }
-                  onDoubleClick={
-                    removeIndex === null
-                      ? undefined
-                      : (doubleEvent) => {
-                          doubleEvent.preventDefault();
-                          doubleEvent.stopPropagation();
-                          void useAnnotationStore.getState().removeVertexAt(removeIndex);
-                        }
-                  }
-                  onKeyDown={
-                    removeIndex === null
-                      ? undefined
-                      : (keyEvent) => {
-                          if (keyEvent.key !== "Delete" && keyEvent.key !== "Backspace") return;
-                          keyEvent.preventDefault();
-                          keyEvent.stopPropagation();
-                          void useAnnotationStore.getState().removeVertexAt(removeIndex);
-                        }
-                  }
-                />
-              );
-            })}
-          </div>
-        )}
-      </div>
+                return (
+                  <button
+                    key={handle.name}
+                    type="button"
+                    aria-label={label}
+                    title={label}
+                    className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded-full border ${
+                      addIndex !== null
+                        ? "border-dashed border-primary/70 bg-background"
+                        : "border-white bg-primary"
+                    }`}
+                    style={{
+                      left: handle.point[0],
+                      top: handle.point[1],
+                      width: gripSize,
+                      height: gripSize,
+                    }}
+                    onPointerDown={(gripEvent) => {
+                      gripEvent.stopPropagation();
+                      if (addIndex !== null) return;
+                      const vertex = vertexIndexOf(handle.name);
+                      const store = useAnnotationStore.getState();
+                      store.beginDrag();
+                      dragRef.current =
+                        vertex !== null
+                          ? { mode: "vertex", index: vertex }
+                          : handle.name === "rotate"
+                            ? { mode: "rotate", handle: "rotate" }
+                            : { mode: "resize", handle: handle.name };
+                      wrapRef.current?.setPointerCapture(gripEvent.pointerId);
+                    }}
+                    onClick={
+                      addIndex === null
+                        ? undefined
+                        : (clickEvent) => {
+                            clickEvent.stopPropagation();
+                            void useAnnotationStore.getState().insertVertexAfter(addIndex);
+                          }
+                    }
+                    onDoubleClick={
+                      removeIndex === null
+                        ? undefined
+                        : (doubleEvent) => {
+                            doubleEvent.preventDefault();
+                            doubleEvent.stopPropagation();
+                            void useAnnotationStore.getState().removeVertexAt(removeIndex);
+                          }
+                    }
+                    onKeyDown={
+                      removeIndex === null
+                        ? undefined
+                        : (keyEvent) => {
+                            if (keyEvent.key !== "Delete" && keyEvent.key !== "Backspace") return;
+                            keyEvent.preventDefault();
+                            keyEvent.stopPropagation();
+                            void useAnnotationStore.getState().removeVertexAt(removeIndex);
+                          }
+                    }
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
