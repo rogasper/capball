@@ -125,3 +125,22 @@ describe("overlayInputs", () => {
     ]);
   });
 });
+
+describe("an inset with no drawings to hang it on (FR-40.2)", () => {
+  it("still spans the clip, because the pitch does not come and go", () => {
+    // The ordinary case: a moment with positions and no shapes at all. Without
+    // this the inset would be missing from exactly those clips.
+    const plan = buildOverlayPlan([], context, { spanClipWhenEmpty: true });
+    expect(plan.intervals).toHaveLength(1);
+    expect(plan.intervals[0]?.startMs).toBe(0);
+    // Clip-relative, like every interval in this module: 0 is the clip's first frame.
+    expect(plan.intervals[0]?.endMs).toBe(20_000);
+    expect(plan.intervals[0]?.annotations).toEqual([]);
+  });
+
+  it("is an empty plan when nobody asked for an inset", () => {
+    // Unchanged for every existing caller: no drawings, no overlay, so the clip
+    // is byte-for-byte what it was before this release.
+    expect(buildOverlayPlan([], context).intervals).toEqual([]);
+  });
+});

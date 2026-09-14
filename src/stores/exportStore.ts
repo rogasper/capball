@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { listAnnotations, listAnnotationWindows } from "@/lib/db/queries/annotations";
 import type { EventRow } from "@/lib/db/queries/events";
+import { listPositions } from "@/lib/db/queries/positions";
 import {
   describeConflicts,
   type NamingContext,
@@ -12,6 +13,9 @@ import { type ExportMode, ipc } from "@/lib/ipc";
 import { awaitJob } from "@/lib/jobs/jobEvents";
 import { resolveWindow } from "@/lib/phases/rules";
 import { renderOverlayPng } from "@/lib/render/burnIn";
+import { insetFor } from "@/lib/render/pitchInset";
+import { formatTimecode } from "@/lib/time/timecode";
+import { useCalibrationStore } from "@/stores/calibrationStore";
 import { usePhaseStore } from "@/stores/phaseStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -100,9 +104,14 @@ export const useExportStore = create<ExportState>((set, get) => ({
       exportExtraAfterMs: extraAfterMs,
       exportConcatenate: concatenate,
       exportAnnotations: burnIn,
+      exportPitchInset: pitchInset,
       preRollMs,
       postRollMs,
     } = useSettingsStore.getState();
+    const pitchSize = {
+      lengthM: useCalibrationStore.getState().pitchLengthM,
+      widthM: useCalibrationStore.getState().pitchWidthM,
+    };
 
     if (!sourcePath) {
       set({ ...IDLE, phase: "error", error: "Import a video before exporting." });
@@ -203,7 +212,24 @@ export const useExportStore = create<ExportState>((set, get) => ({
         const overlays: { path: string; enable: string }[] = [];
         let effectiveMode: ExportMode = mode;
 
-        if (burnIn) {
+        // The inset is built whether or not the drawings are burned in: it is a
+        // reason to re-encode on its own (FR-40.2).
+        const inset = pitchInset
+          ? insetFor({
+              positions: (await listPositions(event.id)).map((row) => ({
+                xM: row.xM,
+                yM: row.yM,
+                teamName: row.teamName,
+                teamColour: row.teamColor,
+              })),
+              frame: exportSize,
+              size: pitchSize,
+              // What it is showing, which FR-40.2 requires the inset to state.
+              caption: `${event.tagName} · ${formatTimecode(event.anchorMs)}`,
+            })
+          : null;
+
+        if (burnIn || inset !== null) {
           // A drawing's own range is loaded in the same step (FR-20.16): without
           // it the burn-in would resolve the shape from the event's anchor and
           // put it somewhere the app never showed, which is the one thing the
@@ -216,24 +242,32 @@ export const useExportStore = create<ExportState>((set, get) => ({
             ...row,
             ownWindow: windows.get(row.id) ?? null,
           }));
-          if (annotations.length > 0) {
-            const plan = buildOverlayPlan(annotations, {
-              anchorMs: event.anchorMs,
-              // The resolved window, not the stored range: an action's drawings
-              // belong to the clip the export is making, and a zero-length range
-              // would collapse every `"event"` and `"clip"` window inside it.
-              eventStartMs: window.startMs,
-              eventEndMs: window.endMs,
-              durationMs,
-              clipStartMs: range.startMs,
-              clipEndMs: range.endMs,
-            });
+          if (annotations.length > 0 || inset !== null) {
+            const plan = buildOverlayPlan(
+              annotations,
+              {
+                anchorMs: event.anchorMs,
+                // The resolved window, not the stored range: an action's drawings
+                // belong to the clip the export is making, and a zero-length range
+                // would collapse every `"event"` and `"clip"` window inside it.
+                eventStartMs: window.startMs,
+                eventEndMs: window.endMs,
+                durationMs,
+                clipStartMs: range.startMs,
+                clipEndMs: range.endMs,
+              },
+              { spanClipWhenEmpty: inset !== null },
+            );
 
             for (const [intervalIndex, interval] of plan.intervals.entries()) {
               const dataUrl = renderOverlayPng({
                 annotations: interval.annotations,
                 width: exportSize.width,
                 height: exportSize.height,
+                // A static inset, identical for every interval of this clip — the
+                // diagram does not change with the playhead, so it is composited
+                // through the same PNGs rather than through a second input.
+                ...(inset === null ? {} : { inset }),
               });
               const path = await ipc.writeOverlayPng(`clip-${event.id}-${intervalIndex}`, dataUrl);
               overlays.push({

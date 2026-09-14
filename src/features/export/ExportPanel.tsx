@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { applyFilters, isFilterActive, useEventStore } from "@/stores/eventStore";
 import { useExportStore } from "@/stores/exportStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { usePositionStore } from "@/stores/positionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
@@ -103,6 +104,8 @@ export function ExportPanel() {
   const extraAfterMs = useSettingsStore((state) => state.exportExtraAfterMs);
   const concatenate = useSettingsStore((state) => state.exportConcatenate);
   const burnIn = useSettingsStore((state) => state.exportAnnotations);
+  const pitchInset = useSettingsStore((state) => state.exportPitchInset);
+  const countPositions = usePositionStore((state) => state.countFor);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const settingsError = useSettingsStore((state) => state.error);
   const phase = useExportStore((state) => state.phase);
@@ -144,6 +147,29 @@ export function ExportPanel() {
   }, [settingsLoaded, destination, setOptions]);
 
   const selected = useMemo(() => applyFilters(events, filters), [events, filters]);
+
+  /**
+   * How many of the selected moments can carry an inset (FR-40.2).
+   *
+   * The requirement says a clip with no positions is **not offered** an inset
+   * rather than exporting an empty pitch, so the panel states the count before
+   * the export rather than leaving the user to wonder why some clips have one.
+   */
+  const [withPositions, setWithPositions] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!pitchInset || selected.length === 0) {
+      setWithPositions(null);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(selected.map((event) => countPositions(event.id))).then((counts) => {
+      if (!cancelled) setWithPositions(counts.filter((count) => count > 0).length);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pitchInset, selected, countPositions]);
   const filtered = isFilterActive(filters);
 
   const summary = matches.find((match) => match.id === currentMatch?.id);
@@ -301,6 +327,25 @@ export function ExportPanel() {
             drawings means re-encoding the picture, so a clip with them takes as long as an{" "}
             <strong>accurate</strong> cut — a lot slower than a fast one. Clips whose events have no
             drawings are untouched.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-body">
+        <input
+          type="checkbox"
+          checked={pitchInset}
+          onChange={(event) => setOptions({ exportPitchInset: event.currentTarget.checked })}
+          className="mt-0.5 size-3.5 accent-[var(--primary)]"
+        />
+        <span>
+          Add the pitch as an inset
+          <span className="mt-0.5 block text-caption text-muted-foreground">
+            A top-down pitch in the corner of the clip, with this moment's positions on it and the
+            moment's name beside them. It re-encodes the picture like the drawings do.
+            {withPositions === null
+              ? ""
+              : ` ${withPositions} of ${selected.length} selected moment${selected.length === 1 ? "" : "s"} ${withPositions === 1 ? "has" : "have"} positions; the rest get no inset.`}
           </span>
         </span>
       </label>

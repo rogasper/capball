@@ -1,6 +1,7 @@
 import { sortByLayer, toPrimitive } from "@/lib/annotate/primitives";
 import type { Annotation } from "@/lib/annotate/types";
 import { type Canvas2D, renderPrimitives } from "./canvas";
+import { type PitchInset, paintPitchInset } from "./pitchInset";
 
 /**
  * Rasterising the drawings for an export (FR-40.1, D18).
@@ -20,6 +21,13 @@ export type BurnInFrame = {
   /** The export resolution, in pixels. */
   width: number;
   height: number;
+  /**
+   * The pitch as an inset (FR-40.2), drawn into the same transparent PNG as the
+   * drawings. One overlay input and one `enable` expression for the whole frame,
+   * which is what keeps a static inset free of any new machinery in the filter
+   * graph — and what keeps the inset on the canvas renderer rather than on a GPU.
+   */
+  inset?: PitchInset;
 };
 
 export function renderOverlayPng(input: BurnInFrame): string {
@@ -42,6 +50,11 @@ export function renderOverlayPng(input: BurnInFrame): string {
     width,
     height,
   );
+
+  // The inset last, so the drawings are never painted over it, and drawn even
+  // when there are no drawings at all — an inset is a thing worth exporting on
+  // its own.
+  if (input.inset) paintPitchInset(ctx as unknown as Canvas2D, input.inset);
 
   return canvas.toDataURL("image/png");
 }

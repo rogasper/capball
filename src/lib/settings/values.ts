@@ -25,6 +25,11 @@ export type SettingsValues = {
    * forces a re-encode — an annotated clip costs what an accurate one costs.
    */
   exportAnnotations: boolean;
+  /**
+   * Include the pitch as an inset in exported clips (FR-40.2). Off by default,
+   * like the burn-in, because carrying it means re-encoding the picture.
+   */
+  exportPitchInset: boolean;
   /** How long a new shape is on screen by default (FR-20.4). */
   annotationWindowMs: number;
   /** Pitch dimensions, because they change what a stored metre means (FR-30.1). */
@@ -44,6 +49,7 @@ export const DEFAULT_SETTINGS: SettingsValues = {
   exportExtraAfterMs: 0,
   exportConcatenate: false,
   exportAnnotations: false,
+  exportPitchInset: false,
   annotationWindowMs: 2_500,
   annotationStyle: { ...DEFAULT_STYLE },
   pitchLengthM: DEFAULT_PITCH_LENGTH_M,
@@ -133,6 +139,7 @@ export function decodeSettings(rows: Record<string, string>): SettingsValues {
     exportExtraAfterMs: readMs(rows, "exportExtraAfterMs", DEFAULT_SETTINGS.exportExtraAfterMs),
     exportConcatenate: rows.exportConcatenate === "true",
     exportAnnotations: rows.exportAnnotations === "true",
+    exportPitchInset: rows.exportPitchInset === "true",
     annotationWindowMs: readMs(rows, "annotationWindowMs", DEFAULT_SETTINGS.annotationWindowMs),
     annotationStyle: readStyle(rows, "annotationStyle", DEFAULT_SETTINGS.annotationStyle),
     pitchLengthM: readMetres(rows, "pitchLengthM", DEFAULT_SETTINGS.pitchLengthM),

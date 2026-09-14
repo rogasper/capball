@@ -47,7 +47,11 @@ function seconds(ms: number): string {
  * `'clip'` window cannot be resolved without it. Everything returned is
  * clip-relative and clamped to the clip, so nothing spans beyond the export.
  */
-export function buildOverlayPlan(annotations: Annotation[], context: WindowContext): OverlayPlan {
+export function buildOverlayPlan(
+  annotations: Annotation[],
+  context: WindowContext,
+  options: { spanClipWhenEmpty?: boolean } = {},
+): OverlayPlan {
   const clipStart = context.clipStartMs ?? context.eventStartMs;
   const clipEnd = context.clipEndMs ?? context.eventEndMs;
   const durationMs = Math.max(0, clipEnd - clipStart);
@@ -67,7 +71,15 @@ export function buildOverlayPlan(annotations: Annotation[], context: WindowConte
     windows.set(annotation.id, { startMs, endMs });
   }
 
-  if (windows.size === 0) return { intervals: [], skipped };
+  if (windows.size === 0) {
+    // Nothing to draw over the picture — but an **inset** is on screen for the
+    // whole clip whatever the drawings do, so a caller that asked for one needs
+    // an interval to hang it on. Without this the pitch would be missing from
+    // exactly the clips that have positions and no shapes, which is most of them.
+    return options.spanClipWhenEmpty
+      ? { intervals: [{ startMs: 0, endMs: durationMs, annotations: [] }], skipped }
+      : { intervals: [], skipped };
+  }
 
   // Every point where the visible set can change. Shapes with the same window
   // contribute the same boundaries, so they collapse into one interval and one

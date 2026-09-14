@@ -25,6 +25,7 @@ type ExportOptions = Pick<
   | "exportExtraAfterMs"
   | "exportConcatenate"
   | "exportAnnotations"
+  | "exportPitchInset"
 >;
 
 type AnnotationDefaults = Pick<SettingsValues, "annotationWindowMs" | "annotationStyle">;

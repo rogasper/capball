@@ -38,6 +38,8 @@ describe("decodeSettings", () => {
       exportExtraAfterMs: 1_000,
       exportConcatenate: true,
       exportAnnotations: false,
+      // Off by default like the burn-in, because carrying it re-encodes (FR-40.2).
+      exportPitchInset: false,
       annotationWindowMs: 3_000,
       pitchLengthM: 100,
       pitchWidthM: 64,
