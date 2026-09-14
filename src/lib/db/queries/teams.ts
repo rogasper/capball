@@ -36,3 +36,14 @@ export async function renameTeam(id: number, name: string): Promise<void> {
   if (!trimmed) throw new Error("A team needs a name.");
   await db.update(teams).set({ name: trimmed }).where(eq(teams.id, id));
 }
+
+/**
+ * Sets a team's colour, or clears it with `null` (FR-8.1).
+ *
+ * The column has existed since R0 and every marker reads it — the pitch view,
+ * the overlay on the frame and the marking panel — but nothing could write it
+ * until R2, so every marker fell back to a neutral and two teams looked alike.
+ */
+export async function setTeamColor(id: number, color: string | null): Promise<void> {
+  await db.update(teams).set({ color }).where(eq(teams.id, id));
+}

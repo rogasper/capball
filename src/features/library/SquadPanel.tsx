@@ -1,10 +1,21 @@
-import { Plus, Trash2, X } from "lucide-react";
+import { Ban, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { EditableName } from "@/components/editable-name";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useSquadStore } from "@/stores/squadStore";
+
+/**
+ * The colours a team can be marked with (FR-8.1).
+ *
+ * Mid-tone on purpose: every marker and position reads its team's colour, and a
+ * marker carries the shirt number over that colour, so the swatches have to work
+ * against both a light and a dark surface. Colour is never the only signal — the
+ * number and the team's name are always drawn too (NFR-24).
+ */
+const TEAM_COLOURS = ["#DA291C", "#1D4ED8", "#15803D", "#B45309", "#6D28D9", "#0F766E"];
 
 function TeamSquad({ teamId }: { teamId: number }) {
   const team = useSquadStore((state) => state.teams[teamId]);
@@ -12,6 +23,7 @@ function TeamSquad({ teamId }: { teamId: number }) {
   const addPlayer = useSquadStore((state) => state.addPlayer);
   const removePlayer = useSquadStore((state) => state.removePlayer);
   const renameTeam = useSquadStore((state) => state.renameTeam);
+  const setTeamColor = useSquadStore((state) => state.setTeamColor);
 
   const [name, setName] = useState("");
   const [shirt, setShirt] = useState("");
@@ -38,6 +50,34 @@ function TeamSquad({ teamId }: { teamId: number }) {
       <h4 className="text-label text-muted-foreground">
         <EditableName value={team.name} onCommit={(next) => void renameTeam(team.id, next)} />
       </h4>
+
+      <fieldset className="flex flex-wrap items-center gap-1">
+        <legend className="sr-only">Colour for {team.name}</legend>
+        <span className="text-caption text-muted-foreground">Colour</span>
+        {TEAM_COLOURS.map((colour) => (
+          <button
+            key={colour}
+            type="button"
+            aria-label={`${team.name} plays in ${colour}`}
+            aria-pressed={team.color === colour}
+            className={cn(
+              "size-4 rounded-full border",
+              team.color === colour ? "border-foreground" : "border-border",
+            )}
+            style={{ background: colour }}
+            onClick={() => void setTeamColor(team.id, colour)}
+          />
+        ))}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`No colour for ${team.name}`}
+          aria-pressed={team.color === null}
+          onClick={() => void setTeamColor(team.id, null)}
+        >
+          <Ban aria-hidden="true" />
+        </Button>
+      </fieldset>
 
       {players.length === 0 ? (
         <p className="text-label text-muted-foreground">No players yet.</p>

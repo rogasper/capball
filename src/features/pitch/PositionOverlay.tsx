@@ -8,7 +8,7 @@ import { activeCalibrationAt, useCalibrationStore } from "@/stores/calibrationSt
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePositionStore } from "@/stores/positionStore";
-import { markerOffsets, normaliseFromBox } from "./markers";
+import { markerLabel, markerOffsets, NEUTRAL_TEAM_COLOUR, normaliseFromBox } from "./markers";
 
 /**
  * Marking player positions on the frame (FR-30.3, FR-30.4).
@@ -147,15 +147,15 @@ export function PositionOverlay({
             <span
               key={position.id}
               aria-hidden="true"
-              title={`${position.shirtNumber ?? "?"} ${position.playerName} · ${position.teamName}`}
+              title={`${markerLabel(position)} ${position.playerName} · ${position.teamName}`}
               className="absolute grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white text-[10px] font-semibold text-white shadow"
               style={{
                 left: point[0],
                 top: point[1],
-                background: position.teamColor ?? "#111827",
+                background: position.teamColor ?? NEUTRAL_TEAM_COLOUR,
               }}
             >
-              {position.shirtNumber ?? "?"}
+              {markerLabel(position)}
             </span>
           );
         })}

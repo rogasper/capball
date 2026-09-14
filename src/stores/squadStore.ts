@@ -17,6 +17,7 @@ type SquadState = {
   }) => Promise<void>;
   removePlayer: (teamId: number, playerId: number) => Promise<void>;
   renameTeam: (teamId: number, name: string) => Promise<void>;
+  setTeamColor: (teamId: number, color: string | null) => Promise<void>;
   clearError: () => void;
 };
 
@@ -76,6 +77,28 @@ export const useSquadStore = create<SquadState>((set, get) => ({
       await get().load(Object.keys(get().players).map(Number));
     } catch (error) {
       set({ error: messageOf(error) });
+    }
+  },
+
+  async setTeamColor(teamId, color) {
+    const before = get().teams[teamId]?.color ?? null;
+    // Applied locally first: a colour is chosen by looking at the result, and a
+    // round trip before it appears would make the swatches feel broken.
+    set((state) => {
+      const team = state.teams[teamId];
+      return team ? { teams: { ...state.teams, [teamId]: { ...team, color } } } : {};
+    });
+
+    try {
+      await teamsQuery.setTeamColor(teamId, color);
+    } catch (error) {
+      set((state) => {
+        const team = state.teams[teamId];
+        return {
+          teams: team ? { ...state.teams, [teamId]: { ...team, color: before } } : state.teams,
+          error: messageOf(error),
+        };
+      });
     }
   },
 
