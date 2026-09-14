@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Annotation, ShapeKind } from "@/lib/annotate/types";
+import { type Annotation, type ShapeKind, spaceOf } from "@/lib/annotate/types";
 import { cn } from "@/lib/utils";
 import { useAnnotationStore } from "@/stores/annotationStore";
 
@@ -22,9 +22,18 @@ const KIND_LABELS: Record<ShapeKind, string> = {
   text: "Text",
 };
 
+/**
+ * A shape in words, including which surface it belongs to.
+ *
+ * The space matters to the reader: a pitch-anchored shape is not on the frame at
+ * all, and saying so here is what stops "why can't I drag this?" — it is dragged
+ * on the pitch view, not over the video.
+ */
 export function describeAnnotation(annotation: Annotation): string {
   const kind = KIND_LABELS[annotation.kind];
-  return annotation.label ? `${kind} · ${annotation.label}` : kind;
+  const onPitch = spaceOf(annotation.geometry) === "pitch" ? "on the pitch" : null;
+  const parts = [kind, onPitch, annotation.label].filter(Boolean);
+  return parts.join(" · ");
 }
 
 export function AnnotationLayers() {

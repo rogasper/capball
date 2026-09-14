@@ -1,4 +1,12 @@
-import { boundsOfPoints, type Point, shapeVertices, toRelative } from "./geometry";
+import {
+  boundsOfPoints,
+  type HandleName,
+  midpointIndexOf,
+  type Point,
+  shapeVertices,
+  toRelative,
+  vertexIndexOf,
+} from "./geometry";
 import type { Annotation, Geometry, ShapeKind } from "./types";
 
 /**
@@ -152,3 +160,52 @@ export function edgeMidpoint(annotation: Annotation, index: number): Point | nul
 export function vertexCount(annotation: Annotation): number {
   return vertexList(annotation).length;
 }
+
+/**
+ * A rectangle's resize corners double as its vertices, in the order
+ * `shapeVertices` and `boxCornersPx` both use.
+ *
+ * Shared so the frame canvas and the pitch view agree about which corner is
+ * "vertex 2" — the pitch view hands M12's toolkit a rect whose units are metres,
+ * and the mapping has to be the same one.
+ */
+const RECT_CORNER_INDEX: Partial<Record<HandleName, number>> = { nw: 0, ne: 1, se: 2, sw: 3 };
+
+/**
+ * The vertex a grip would remove, or `null` when that grip only moves something.
+ *
+ * A polygon vertex and a rectangle corner are both removable; a midpoint grip
+ * adds a corner, and a line's endpoint has none to spare.
+ */
+export function removableVertexFor(
+  name: HandleName,
+  annotation: Annotation | undefined,
+): number | null {
+  const vertex = vertexIndexOf(name);
+  if (vertex !== null) return vertex;
+  const corner = RECT_CORNER_INDEX[name];
+  if (corner !== undefined && annotation?.kind === "rect") return corner;
+  return null;
+}
+
+/** What a grip is, in words — including the gesture that is invisible until named. */
+export function handleLabel(name: HandleName, annotation: Annotation | undefined): string {
+  const vertex = vertexIndexOf(name);
+  if (vertex !== null) {
+    const total = annotation ? vertexCount(annotation) : 0;
+    return `Corner ${vertex + 1} of ${total} — drag to move, Delete to remove`;
+  }
+  if (midpointIndexOf(name) !== null) return "Add a corner on this edge";
+
+  return FIXED_HANDLE_LABELS[name] ?? "Handle";
+}
+
+const FIXED_HANDLE_LABELS: Record<string, string> = {
+  nw: "Resize from top left — Delete removes this corner",
+  ne: "Resize from top right — Delete removes this corner",
+  se: "Resize from bottom right — Delete removes this corner",
+  sw: "Resize from bottom left — Delete removes this corner",
+  p0: "Move start point",
+  p1: "Move end point",
+  rotate: "Rotate",
+};

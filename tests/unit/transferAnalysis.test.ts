@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_STYLE } from "@/lib/annotate/types";
 import type { EventRow } from "@/lib/db/queries/events";
 import type { Video } from "@/lib/db/queries/videos";
+import type { AnalysisAnnotation } from "@/lib/transfer/analysis";
 import {
   ANALYSIS_FORMAT,
   ANALYSIS_VERSION,
@@ -247,6 +248,76 @@ describe("a version 2 file carries the R1 sections", () => {
     expect(file.positions[0]).toMatchObject({ playerName: "Saka", xM: -14.25 });
     // Named fields, not blobs: a person can read the drawing back.
     expect(file.annotations[0]?.geometry).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.1, rotation: 0 });
+  });
+
+  it("carries the space inside the geometry, so a pitch shape cannot import as a frame shape", () => {
+    // The space qualifies the geometry's units, so it travels with them. That is
+    // also why this needs no new field in the format: `geometry` is passed
+    // through whole, and an older file simply has no `space` (which means frame).
+    const pitched: AnalysisAnnotation = {
+      uid: "annotation-pitch",
+      eventKey: key,
+      kind: "polygon",
+      windowMode: "event",
+      windowMs: 2_000,
+      geometry: {
+        x: -20,
+        y: -10,
+        w: 40,
+        h: 20,
+        rotation: 0.2,
+        points: [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        space: "pitch",
+      },
+      style: { ...DEFAULT_STYLE, fillPattern: "crossHatch" },
+      label: "Pressing triangle",
+      z: 2,
+    };
+
+    const file = buildAnalysisFile({
+      match: {
+        homeTeam: "Manchester United",
+        awayTeam: "Sabah",
+        competition: null,
+        season: null,
+        kickoffAt: null,
+        venue: null,
+        notes: null,
+      },
+      videos: [video],
+      events: [event],
+      taxonomy: [],
+      annotations: [pitched],
+    });
+
+    const parsed = parseAnalysisFile(JSON.stringify(file));
+    expect(parsed).toMatchObject({
+      annotations: [
+        {
+          uid: "annotation-pitch",
+          label: "Pressing triangle",
+          // Metres, the rotation, and the polygon's own points all survive: the
+          // transfer passes the geometry through whole rather than by field.
+          geometry: {
+            space: "pitch",
+            x: -20,
+            y: -10,
+            rotation: 0.2,
+            points: [
+              [0, 0],
+              [1, 0],
+              [0.5, 1],
+            ],
+          },
+          // The pattern is part of the style, which also travels whole.
+          style: { fillPattern: "crossHatch" },
+        },
+      ],
+    });
   });
 
   it("defaults the sections to empty for a caller that has none", () => {

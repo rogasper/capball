@@ -127,13 +127,31 @@ describe("drawing", () => {
       windowMode: "moment",
       windowMs: 4_000,
     });
-    expect(input.geometry).toEqual(box);
+    // The space travels with the geometry, because that is what its numbers mean
+    // (FR-80.2): a shape drawn on the frame canvas is a frame shape.
+    expect(input.geometry).toEqual({ ...box, space: "frame" });
     expect(input.uid).toBeTruthy();
 
     const state = useAnnotationStore.getState();
     expect(state.annotations).toHaveLength(1);
     expect(state.selectedId).toBe(state.annotations[0].id);
     expect(state.draft).toBeNull();
+  });
+
+  it("stores the space the surface declared, so a pitch shape stays a pitch shape", async () => {
+    useAnnotationStore.setState({ eventId: 7, tool: "rect", draft: box });
+    useAnnotationStore.getState().setDraftSpace("pitch");
+
+    await useAnnotationStore.getState().commitDraft();
+
+    expect(createAnnotation.mock.calls[0][0].geometry).toEqual({ ...box, space: "pitch" });
+  });
+
+  it("returns to the frame space when a new event is opened", async () => {
+    useAnnotationStore.getState().setDraftSpace("pitch");
+    listAnnotations.mockResolvedValue([]);
+    await useAnnotationStore.getState().load(7);
+    expect(useAnnotationStore.getState().draftSpace).toBe("frame");
   });
 
   it("puts a new shape on top of the stack", async () => {
@@ -405,5 +423,39 @@ describe("reshaping (FR-20.11)", () => {
     useAnnotationStore.getState().moveVertexTo(0, [500, 500], FRAME);
 
     expect(useAnnotationStore.getState().annotations[0].geometry).toEqual(before);
+  });
+});
+
+describe("which surface owns the tool, and what the user is told", () => {
+  it("arms a tool on the surface that asked for it", () => {
+    useAnnotationStore.getState().setTool("rect", "pitch");
+    expect(useAnnotationStore.getState().tool).toBe("rect");
+    expect(useAnnotationStore.getState().toolSurface).toBe("pitch");
+  });
+
+  it("keeps the surface when the tool is cleared, so context does not jump", () => {
+    useAnnotationStore.getState().setTool("rect", "pitch");
+    useAnnotationStore.getState().setTool(null);
+    expect(useAnnotationStore.getState().tool).toBeNull();
+    expect(useAnnotationStore.getState().toolSurface).toBe("pitch");
+  });
+
+  it("defaults to the frame, which is where a tool has always been armed", () => {
+    useAnnotationStore.getState().setTool("arrow");
+    expect(useAnnotationStore.getState().toolSurface).toBe("frame");
+  });
+
+  it("carries a notice, and drops it when the selection changes", () => {
+    useAnnotationStore.getState().reportNotice("That shape lives on the pitch.");
+    expect(useAnnotationStore.getState().notice).toMatch(/lives on the pitch/);
+
+    useAnnotationStore.getState().select(3);
+    expect(useAnnotationStore.getState().notice).toBeNull();
+  });
+
+  it("drops a notice when a tool is picked", () => {
+    useAnnotationStore.getState().reportNotice("Something to read");
+    useAnnotationStore.getState().setTool("line");
+    expect(useAnnotationStore.getState().notice).toBeNull();
   });
 });

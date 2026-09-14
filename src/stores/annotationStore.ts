@@ -15,6 +15,7 @@ import {
 import { sortByLayer } from "@/lib/annotate/primitives";
 import {
   type Annotation,
+  type AnnotationSpace,
   type AnnotationStyle,
   DEFAULT_STYLE,
   type Geometry,
@@ -37,6 +38,9 @@ import * as annotationsQuery from "@/lib/db/queries/annotations";
  *    a restored shape the same shape as far as a later export or import is
  *    concerned.
  */
+
+/** The two drawing surfaces (FR-80.4). Each owns its own armed tool. */
+export type AnnotationSurface = "frame" | "pitch";
 
 const MAX_UNDO = 50;
 
@@ -66,6 +70,15 @@ type AnnotationState = {
 
   /** `null` means no drawing tool is active and tag shortcuts still fire. */
   tool: ShapeKind | null;
+  /**
+   * Which surface the armed tool belongs to.
+   *
+   * The frame canvas and the pitch view draw in different spaces, so a tool
+   * armed in one must not capture the other's pointer. Without this, choosing a
+   * tool on the pitch left the video swallowing every click — it looked like the
+   * app had locked up, and there was no way out but the Draw tab's Select button.
+   */
+  toolSurface: AnnotationSurface;
   /** The shape being dragged out, before it is stored. */
   draft: Geometry | null;
   /** Freehand points collected so far, in normalised frame coordinates. */
@@ -73,6 +86,14 @@ type AnnotationState = {
   draftLabel: string | null;
   /** The geometry the drag in progress started from. */
   dragOrigin: Geometry | null;
+  /**
+   * Where the shape being drawn will be anchored (FR-80).
+   *
+   * The **surface** decides, not a global setting: the frame canvas draws in
+   * frame fractions, the pitch view in metres, and a shape cannot be drawn in a
+   * space the user cannot see. Each surface sets this as a gesture begins.
+   */
+  draftSpace: AnnotationSpace;
 
   style: AnnotationStyle;
   windowMode: WindowMode;
@@ -87,7 +108,7 @@ type AnnotationState = {
   countDrawings: (eventId: number) => Promise<number>;
   clear: () => void;
 
-  setTool: (tool: ShapeKind | null) => void;
+  setTool: (tool: ShapeKind | null, surface?: AnnotationSurface) => void;
   setStyle: (patch: Partial<AnnotationStyle>) => void;
   setWindow: (mode: WindowMode, ms?: number) => void;
 
@@ -95,6 +116,8 @@ type AnnotationState = {
   updateDraft: (geometry: Geometry) => void;
   updateDraftPoints: (points: Point[]) => void;
   setDraftLabel: (label: string) => void;
+  /** Declares which space the next drawn shape belongs to. */
+  setDraftSpace: (space: AnnotationSpace) => void;
   cancelDraft: () => void;
   commitDraft: () => Promise<void>;
 
@@ -119,6 +142,10 @@ type AnnotationState = {
   redo: () => Promise<void>;
   reportError: (message: string) => void;
   clearError: () => void;
+  /** A message that is information, not a failure — shown where the user is. */
+  notice: string | null;
+  reportNotice: (message: string) => void;
+  clearNotice: () => void;
 };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -152,16 +179,19 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
     annotations: [],
     selectedId: null,
     tool: null,
+    toolSurface: "frame",
     draft: null,
     draftPoints: null,
     draftLabel: null,
     dragOrigin: null,
+    draftSpace: "frame",
     style: { ...DEFAULT_STYLE },
     windowMode: "moment",
     windowMs: INITIAL_WINDOW_MS,
     undoStack: [],
     redoStack: [],
     error: null,
+    notice: null,
 
     async load(eventId) {
       try {
@@ -174,9 +204,11 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
           draftPoints: null,
           draftLabel: null,
           dragOrigin: null,
+          draftSpace: "frame",
           undoStack: [],
           redoStack: [],
           error: null,
+          notice: null,
         });
       } catch (error) {
         set({ eventId, annotations: [], error: messageOf(error) });
@@ -199,18 +231,30 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
         annotations: [],
         selectedId: null,
         tool: null,
+        toolSurface: "frame",
         draft: null,
         draftPoints: null,
         draftLabel: null,
         dragOrigin: null,
+        draftSpace: "frame",
         undoStack: [],
         redoStack: [],
         error: null,
+        notice: null,
       });
     },
 
-    setTool(tool) {
-      set({ tool, draft: null, draftPoints: null, draftLabel: null });
+    setTool(tool, surface) {
+      set({
+        tool,
+        // A null tool keeps the surface it was on, so clearing does not move the
+        // user's context to the other one.
+        toolSurface: tool === null ? get().toolSurface : (surface ?? "frame"),
+        draft: null,
+        draftPoints: null,
+        draftLabel: null,
+        notice: null,
+      });
     },
 
     /** Applies to the selected shape *and* becomes the style of the next one (FR-20.5). */
@@ -267,6 +311,10 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
       set({ draftLabel: label });
     },
 
+    setDraftSpace(space) {
+      set({ draftSpace: space });
+    },
+
     cancelDraft() {
       set({ draft: null, draftPoints: null, draftLabel: null });
     },
@@ -275,12 +323,18 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
       const { eventId, tool, draft, draftPoints, draftLabel, style, windowMode, windowMs } = get();
       if (eventId === null || tool === null) return;
 
+      const space = get().draftSpace;
       const geometry =
         tool === "freehand"
           ? draftPoints && draftPoints.length >= 2
             ? pathGeometry(simplifyPath(draftPoints, 0.002))
             : null
           : draft;
+
+      if (!geometry) return;
+      // The space travels with the geometry, because that is what its numbers
+      // mean — and it is the one field a projection cannot infer later.
+      const placed: Geometry = { ...geometry, space };
 
       if (!geometry) return;
 
@@ -291,7 +345,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
         kind: tool,
         windowMode,
         windowMs,
-        geometry,
+        geometry: placed,
         style: { ...style },
         label: tool === "text" ? (draftLabel ?? "") : (draftLabel ?? null),
         z: nextZ(get().annotations),
@@ -306,7 +360,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
           kind: draftAnnotation.kind,
           windowMode,
           windowMs,
-          geometry,
+          geometry: placed,
           style: draftAnnotation.style,
           label: draftAnnotation.label,
           z: draftAnnotation.z,
@@ -316,6 +370,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
           annotations: sortByLayer([...state.annotations, stored]),
           selectedId: stored.id,
           error: null,
+          notice: null,
         }));
         pushCommand({ kind: "create", annotation: stored });
       } catch (error) {
@@ -324,7 +379,8 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
     },
 
     select(id) {
-      set({ selectedId: id });
+      // A notice refers to the selection it was raised for.
+      set({ selectedId: id, notice: null });
     },
 
     beginDrag() {
@@ -593,6 +649,14 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
       } catch (error) {
         set({ error: messageOf(error) });
       }
+    },
+
+    reportNotice(message) {
+      set({ notice: message });
+    },
+
+    clearNotice() {
+      set({ notice: null });
     },
 
     reportError(message) {

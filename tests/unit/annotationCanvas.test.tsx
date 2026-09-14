@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AnnotationCanvas } from "@/features/annotate/AnnotationCanvas";
@@ -157,9 +157,25 @@ describe("the grips a selected shape shows", () => {
 
   it("shows no grips at all while a tool is in hand", () => {
     select(drawing("rect"));
-    useAnnotationStore.setState({ tool: "ellipse" });
+    useAnnotationStore.setState({ tool: "ellipse", toolSurface: "frame" });
     draw();
 
     expect(screen.queryByRole("button", { name: /^Resize from/ })).toBeNull();
+  });
+
+  it("leaves the video alone while the pitch view owns the tool", () => {
+    select(null);
+    // A tool armed on the other surface must not swallow clicks here: that is
+    // what made the app look locked while a zone was being drawn on the pitch.
+    useAnnotationStore.setState({ tool: "rect", toolSurface: "pitch" });
+    draw();
+
+    fireEvent.pointerDown(screen.getByLabelText("Annotation layer"), {
+      clientX: 40,
+      clientY: 40,
+    });
+
+    expect(useAnnotationStore.getState().draft).toBeNull();
+    expect(useAnnotationStore.getState().draftPoints).toBeNull();
   });
 });

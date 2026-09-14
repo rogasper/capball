@@ -15,13 +15,17 @@ import {
   twoPointGeometry,
   vertexIndexOf,
 } from "@/lib/annotate/geometry";
-import { toPrimitive, toPrimitives } from "@/lib/annotate/primitives";
+import { toPrimitive, visibleAnnotations } from "@/lib/annotate/primitives";
 import type { Annotation, ShapeKind } from "@/lib/annotate/types";
-import { vertexCount } from "@/lib/annotate/vertices";
+import { spaceOf } from "@/lib/annotate/types";
+import { handleLabel, removableVertexFor } from "@/lib/annotate/vertices";
 import { resolveWindow, type WindowContext } from "@/lib/annotate/window";
+import { homographyOf, regionOf } from "@/lib/pitch/positions";
+import { pitchShapeAt, projectShapes } from "@/lib/pitch/shapePrimitives";
 import { playback } from "@/lib/playback";
 import { type Canvas2D, renderPrimitives } from "@/lib/render/canvas";
 import { useAnnotationStore } from "@/stores/annotationStore";
+import { activeCalibrationAt, useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlayerStore } from "@/stores/playerStore";
@@ -45,33 +49,6 @@ const HANDLE_SIZE_PX = 9;
 const ADD_HANDLE_SIZE_PX = 6;
 /** Freehand points closer together than this are not worth keeping. */
 const FREEHAND_STEP = 0.0015;
-
-/**
- * A rectangle's resize corners double as its vertices, in the order
- * `shapeVertices` and `boxCornersPx` both use — which is what lets the same
- * grip be dragged (resize) and removed (the corner disappears).
- */
-const RECT_CORNER_INDEX: Partial<Record<HandleName, number>> = { nw: 0, ne: 1, se: 2, sw: 3 };
-
-const FIXED_HANDLE_LABELS: Record<string, string> = {
-  nw: "Resize from top left — Delete removes this corner",
-  ne: "Resize from top right — Delete removes this corner",
-  se: "Resize from bottom right — Delete removes this corner",
-  sw: "Resize from bottom left — Delete removes this corner",
-  p0: "Move start point",
-  p1: "Move end point",
-  rotate: "Rotate",
-};
-
-function handleLabel(name: HandleName, annotation: Annotation | undefined): string {
-  const vertex = vertexIndexOf(name);
-  if (vertex !== null) {
-    const total = annotation ? vertexCount(annotation) : 0;
-    return `Corner ${vertex + 1} of ${total} — drag to move, Delete to remove`;
-  }
-  if (midpointIndexOf(name) !== null) return "Add a corner on this edge";
-  return FIXED_HANDLE_LABELS[name] ?? "Handle";
-}
 
 type Drag =
   | { mode: "move"; last: Point }
@@ -102,7 +79,14 @@ export function AnnotationCanvas({
   const eventId = useAnnotationStore((state) => state.eventId);
   const annotations = useAnnotationStore((state) => state.annotations);
   const selectedId = useAnnotationStore((state) => state.selectedId);
-  const tool = useAnnotationStore((state) => state.tool);
+  const armed = useAnnotationStore((state) => state.tool);
+  const toolSurface = useAnnotationStore((state) => state.toolSurface);
+  /**
+   * The tool as *this* surface sees it. The pitch view arms its own tools, and a
+   * tool armed there must not capture the video's pointer — that is what made the
+   * app look locked while a zone was being drawn on the pitch (FR-80.4).
+   */
+  const tool = toolSurface === "frame" ? armed : null;
   const draft = useAnnotationStore((state) => state.draft);
   const draftPoints = useAnnotationStore((state) => state.draftPoints);
   const style = useAnnotationStore((state) => state.style);
@@ -128,6 +112,35 @@ export function AnnotationCanvas({
    * that depends on it.
    */
   const frame = useMemo<Rect>(() => ({ x: 0, y: 0, w: rect.w, h: rect.h }), [rect.w, rect.h]);
+
+  /**
+   * The pitch-anchored shapes on this frame, projected (FR-80.2).
+   *
+   * A pitch shape is stored in metres, so it can only reach the picture through
+   * the calibration that applies to this event. Without one nothing is drawn and
+   * the pitch panel says why — the canvas never invents a placement.
+   */
+  const probe = useLibraryStore((state) => state.probe);
+  const calibrations = useCalibrationStore((state) => state.calibrations);
+  const pitchLengthM = useCalibrationStore((state) => state.pitchLengthM);
+  const pitchWidthM = useCalibrationStore((state) => state.pitchWidthM);
+
+  const projection = useMemo(() => {
+    const videoSize = { width: probe?.width ?? 0, height: probe?.height ?? 0 };
+    const calibration = selectedEvent
+      ? activeCalibrationAt(calibrations, selectedEvent.anchorMs)
+      : null;
+    if (!calibration || videoSize.width <= 0 || videoSize.height <= 0) {
+      return { h: null, region: null, videoSize };
+    }
+    const size = { lengthM: pitchLengthM, widthM: pitchWidthM };
+    const solved = homographyOf(calibration.points, videoSize);
+    return {
+      h: solved.ok ? solved.h : null,
+      region: regionOf(calibration.points, size),
+      videoSize,
+    };
+  }, [calibrations, selectedEvent, probe?.width, probe?.height, pitchLengthM, pitchWidthM]);
 
   const draftAnnotation = useCallback((): Annotation | null => {
     if (tool === null) return null;
@@ -177,14 +190,26 @@ export function AnnotationCanvas({
     ctx.setTransform(width / frame.w, 0, 0, height / frame.h, 0, 0);
     ctx.clearRect(0, 0, frame.w, frame.h);
 
-    const primitives = toPrimitives(annotations, playback.timeMs, windowContext());
+    const context = windowContext();
+    const visible = visibleAnnotations(annotations, playback.timeMs, context);
+    const frameShapes = visible.filter((annotation) => spaceOf(annotation.geometry) === "frame");
+    const pitchShapes = visible.filter((annotation) => spaceOf(annotation.geometry) === "pitch");
+
+    // Both spaces reach the picture through the one renderer, so a pitch shape
+    // and a frame shape cannot disagree about paint order or about pixels.
+    const primitives = [
+      ...frameShapes.map(toPrimitive),
+      ...projectShapes(pitchShapes, projection.h, projection.videoSize, projection.region)
+        .primitives,
+    ].sort((a, b) => a.z - b.z || a.annotationId - b.annotationId);
+
     const pending = draftAnnotation();
-    if (pending) primitives.push(toPrimitive(pending));
+    if (pending && spaceOf(pending.geometry) === "frame") primitives.push(toPrimitive(pending));
 
     // The renderer only ever assigns string styles, so the narrower structural
     // type is accurate; it is what makes the drawing assertable in a test.
     renderPrimitives(primitives, ctx as unknown as Canvas2D, frame.w, frame.h);
-  }, [annotations, draftAnnotation, frame, windowContext]);
+  }, [annotations, draftAnnotation, frame, projection, windowContext]);
 
   useEffect(() => {
     draw();
@@ -212,7 +237,11 @@ export function AnnotationCanvas({
 
   useEffect(() => {
     const selected = annotations.find((annotation) => annotation.id === selectedId);
-    setHandles(selected ? handlesFor(selected, frame) : []);
+    // A pitch-anchored shape has no grips here: its numbers are metres, and a
+    // handle drag in frame pixels would be nonsense. It is edited on the pitch
+    // view, where its geometry is the view's own coordinate space (FR-80.3).
+    const editable = selected && spaceOf(selected.geometry) === "frame" ? selected : null;
+    setHandles(editable ? handlesFor(editable, frame) : []);
   }, [annotations, selectedId, frame]);
 
   /** Pointer position in canvas pixels, always measured against the canvas. */
@@ -226,6 +255,9 @@ export function AnnotationCanvas({
     if (tool === null) return;
     const store = useAnnotationStore.getState();
     const point = normalizePoint(frame, px[0], px[1]);
+    // Both spaces can be drawn in; this surface draws on the frame, and saying
+    // so here is what keeps the space out of a global setting (FR-80.4).
+    store.setDraftSpace("frame");
 
     if (tool === "freehand") {
       freehandRef.current = [point];
@@ -255,7 +287,10 @@ export function AnnotationCanvas({
 
   const startSelecting = (px: Point) => {
     const store = useAnnotationStore.getState();
-    const selected = annotations.find((annotation) => annotation.id === selectedId);
+    const candidate = annotations.find((annotation) => annotation.id === selectedId);
+    // A pitch-anchored shape is visible here but not editable here: its grips
+    // live on the pitch view, where a pixel means a metre (FR-80.3).
+    const selected = candidate && spaceOf(candidate.geometry) === "frame" ? candidate : undefined;
 
     if (selected) {
       // The add-a-corner grips are clicks, not drags, so they are not part of
@@ -278,11 +313,36 @@ export function AnnotationCanvas({
       }
     }
 
-    // Topmost first: the last painted shape is the one the user sees.
-    const ordered = [...annotations].sort((a, b) => b.z - a.z || b.id - a.id);
+    // Topmost first: the last painted shape is the one the user sees. Only
+    // frame-anchored shapes are tested, because a hit test compares the pointer
+    // with the shape's own numbers and a pitch shape's numbers are metres.
+    const ordered = annotations
+      .filter((annotation) => spaceOf(annotation.geometry) === "frame")
+      .sort((a, b) => b.z - a.z || b.id - a.id);
     const hit = ordered.find((annotation) => hitTest(annotation, px, frame, 6));
 
     if (!hit) {
+      // A pitch-anchored shape is visible here but its numbers are metres, so it
+      // cannot be hit-tested against frame pixels — it is tested against the
+      // shape it *projects to*. Clicking it selects it and points at the surface
+      // where it can be moved, rather than doing nothing.
+      const pitched = annotations.filter((annotation) => spaceOf(annotation.geometry) === "pitch");
+      const onPitch = pitchShapeAt(
+        projectShapes(pitched, projection.h, projection.videoSize, projection.region),
+        px,
+        frame,
+        8,
+      );
+
+      if (onPitch !== null) {
+        store.select(onPitch);
+        store.reportNotice(
+          "That shape is anchored to the pitch. Move, reshape or delete it in the Pitch tab, where its numbers are metres.",
+        );
+        dragRef.current = null;
+        return;
+      }
+
       store.select(null);
       dragRef.current = null;
       return;
@@ -405,15 +465,6 @@ export function AnnotationCanvas({
     canvasRef.current?.setPointerCapture(event.pointerId);
   };
 
-  /** The vertex a grip would remove, if that grip is removable at all. */
-  const removableVertex = (name: HandleName, annotation: Annotation | undefined): number | null => {
-    const vertex = vertexIndexOf(name);
-    if (vertex !== null) return vertex;
-    const corner = RECT_CORNER_INDEX[name];
-    if (corner !== undefined && annotation?.kind === "rect") return corner;
-    return null;
-  };
-
   const onRemoveVertex = (index: number) => (event: React.SyntheticEvent) => {
     // A focused corner owns Delete: without stopping the event, the window's
     // shortcut would delete the whole shape instead of one of its corners.
@@ -453,7 +504,7 @@ export function AnnotationCanvas({
         <div className="pointer-events-none absolute" style={{ left: rect.x, top: rect.y }}>
           {handles.map((handle) => {
             const addIndex = midpointIndexOf(handle.name);
-            const removeIndex = removableVertex(handle.name, selected);
+            const removeIndex = removableVertexFor(handle.name, selected);
             const label = handleLabel(handle.name, selected);
             const size = addIndex !== null ? ADD_HANDLE_SIZE_PX : HANDLE_SIZE_PX;
 

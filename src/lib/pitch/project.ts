@@ -41,6 +41,17 @@ function isUsable(px: number, py: number, frame: Frame): boolean {
   return Math.abs(px) <= limitX && Math.abs(py) <= limitY;
 }
 
+/**
+ * Whether a projected pixel is inside the frame's runaway bound.
+ *
+ * Exported because a pitch-anchored **shape** needs the same rule the outline
+ * does: a projection that lands twelve screens away is not a drawing, it is the
+ * fit failing, and it must be dropped rather than rendered (M13).
+ */
+export function isUsableProjection(px: number, py: number, frame: Frame): boolean {
+  return isUsable(px, py, frame);
+}
+
 export function projectOutline(
   h: number[],
   size: PitchSize,

@@ -21,7 +21,8 @@ import { useMagnifierStore } from "@/stores/magnifierStore";
 import { usePositionStore } from "@/stores/positionStore";
 import { useSquadStore } from "@/stores/squadStore";
 import { useTagStore } from "@/stores/tagStore";
-import { PitchView } from "./PitchView";
+import { NEUTRAL_TEAM_COLOUR } from "./markers";
+import { PitchCanvas } from "./PitchCanvas";
 
 /**
  * Marking a player's position, and seeing the shape it makes (FR-30.3, FR-30.5).
@@ -328,7 +329,7 @@ export function MarkingPanel() {
             <li key={position.id} className="flex items-center gap-2 text-label">
               <span
                 className="size-2.5 shrink-0 rounded-full"
-                style={{ background: position.teamColor ?? "var(--muted-foreground)" }}
+                style={{ background: position.teamColor ?? NEUTRAL_TEAM_COLOUR }}
                 aria-hidden="true"
               />
               <span className="min-w-0 flex-1 truncate">
@@ -375,7 +376,7 @@ export function MarkingPanel() {
           </Select>
         </div>
 
-        <PitchView
+        <PitchCanvas
           size={size}
           emptyMessage="No positions on this moment yet. Mark where each player was and they appear here."
           sets={[

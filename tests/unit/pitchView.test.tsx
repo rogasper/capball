@@ -107,3 +107,69 @@ describe("PitchView", () => {
     expect(container.querySelectorAll("path").length).toBeGreaterThanOrEqual(13);
   });
 });
+
+describe("naming a marker without a shirt number", () => {
+  it("uses the player's initials, so two unnumbered markers differ", () => {
+    const { container } = render(
+      <PitchView
+        size={SIZE}
+        emptyMessage="none"
+        sets={[
+          {
+            label: "This moment",
+            variant: "solid",
+            positions: [
+              position({ shirtNumber: null, playerName: "Bruno Fernandes" }),
+              position({
+                id: 2,
+                uid: "p2",
+                playerId: 12,
+                shirtNumber: null,
+                playerName: "Marcus Rashford",
+              }),
+            ],
+          },
+        ]}
+      />,
+    );
+
+    // "?" twice would be indistinguishable, which is what a marker prevents.
+    expect(screen.queryByText("?")).toBeNull();
+    expect(container.textContent).toContain("BF");
+    expect(container.textContent).toContain("MR");
+  });
+
+  it("falls back to a single short name", () => {
+    const { container } = render(
+      <PitchView
+        size={SIZE}
+        emptyMessage="none"
+        sets={[
+          {
+            label: "This moment",
+            variant: "solid",
+            positions: [position({ shirtNumber: null, playerName: "Ronaldinho" })],
+          },
+        ]}
+      />,
+    );
+    expect(container.textContent).toContain("RO");
+  });
+
+  it("still says ? for a player with no name and no number", () => {
+    const { container } = render(
+      <PitchView
+        size={SIZE}
+        emptyMessage="none"
+        sets={[
+          {
+            label: "This moment",
+            variant: "solid",
+            positions: [position({ shirtNumber: null, playerName: "   " })],
+          },
+        ]}
+      />,
+    );
+    expect(container.textContent).toContain("?");
+  });
+});

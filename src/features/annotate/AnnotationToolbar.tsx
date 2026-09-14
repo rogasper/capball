@@ -90,6 +90,8 @@ export function AnnotationToolbar() {
   const undo = useAnnotationStore((state) => state.undo);
   const redo = useAnnotationStore((state) => state.redo);
   const draftPoints = useAnnotationStore((state) => state.draftPoints);
+  const notice = useAnnotationStore((state) => state.notice);
+  const error = useAnnotationStore((state) => state.error);
   const canUndo = useAnnotationStore((state) => state.undoStack.length > 0);
   const canRedo = useAnnotationStore((state) => state.redoStack.length > 0);
 
@@ -109,6 +111,19 @@ export function AnnotationToolbar() {
       {!paused && (
         <p className="rounded-md border border-border bg-muted px-2 py-1.5 text-label text-muted-foreground">
           Pause the video to draw. A drawing belongs to a single frozen frame.
+        </p>
+      )}
+
+      {/* Feedback lives where the tools are. Without this a refusal — drawing
+          freehand on the pitch, say — was recorded and never shown. */}
+      {error && (
+        <p className="rounded-md border border-danger/40 bg-danger/15 px-2 py-1.5 text-label">
+          {error}
+        </p>
+      )}
+      {!error && notice && (
+        <p className="rounded-md border border-border bg-muted px-2 py-1.5 text-label text-muted-foreground">
+          {notice}
         </p>
       )}
 

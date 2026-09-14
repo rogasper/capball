@@ -65,6 +65,12 @@ export type AnnotationStyle = {
  * point. When a box dimension is zero — a horizontal line, a vertical arrow —
  * the corresponding relative coordinate is `0` by definition (see
  * `absolutePoints`), which keeps the degenerate cases well defined.
+ *
+ * `space` says what the box's **units** mean (R2, FR-80). It lives in the
+ * geometry rather than in a column because that is what it qualifies, and
+ * because SQLite cannot add a column idempotently — so a column would have
+ * needed a table rebuild, which this project's rule 9 forbids for a table that
+ * holds data (ADR 0008). Absent means `frame`, which is every R1 row.
  */
 export type Geometry = {
   x: number;
@@ -74,7 +80,28 @@ export type Geometry = {
   /** Radians, around the box centre. */
   rotation: number;
   points?: [number, number][];
+  space?: AnnotationSpace;
 };
+
+/**
+ * What a shape's numbers are measured against.
+ *
+ * `frame` is R1: fractions of the video's content rect, fixed to the pixels they
+ * were drawn on. `pitch` is R2: metres from the pitch centre, projected into the
+ * camera's perspective at draw time, so a corrected calibration moves the shape
+ * (FR-80.2, FR-80.3).
+ */
+export const ANNOTATION_SPACES = ["frame", "pitch"] as const;
+export type AnnotationSpace = (typeof ANNOTATION_SPACES)[number];
+
+export function isAnnotationSpace(value: unknown): value is AnnotationSpace {
+  return typeof value === "string" && (ANNOTATION_SPACES as readonly string[]).includes(value);
+}
+
+/** The space a geometry is in, defaulting to the frame for every R1 row. */
+export function spaceOf(geometry: Geometry): AnnotationSpace {
+  return isAnnotationSpace(geometry.space) ? geometry.space : "frame";
+}
 
 /** An annotation as the UI and the renderer see it. */
 export type Annotation = {
@@ -155,6 +182,7 @@ export function isGeometry(value: unknown): value is Geometry {
   if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) {
     return false;
   }
+  if (candidate.space !== undefined && !isAnnotationSpace(candidate.space)) return false;
   if (candidate.points === undefined) return true;
   return (
     Array.isArray(candidate.points) &&

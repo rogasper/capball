@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markerOffsets, pickMarkers } from "@/features/pitch/markers";
+import { markerLabel, markerOffsets, pickMarkers } from "@/features/pitch/markers";
 import { normalizePoint, type Rect } from "@/lib/annotate/geometry";
 
 /**
@@ -75,5 +75,26 @@ describe("markerOffsets", () => {
     );
     expect(markers.map((marker) => marker.id)).toEqual([4, 9]);
     expect(markers[1].point[1]).toBeCloseTo(0.8 * rect.h);
+  });
+});
+
+describe("naming a marker", () => {
+  it("prefers the shirt number", () => {
+    expect(markerLabel({ shirtNumber: 8, playerName: "Bruno Fernandes" })).toBe("8");
+  });
+
+  it("uses initials when the squad has no number, so two markers differ", () => {
+    expect(markerLabel({ shirtNumber: null, playerName: "Bruno Fernandes" })).toBe("BF");
+    expect(markerLabel({ shirtNumber: null, playerName: "Marcus Rashford" })).toBe("MR");
+  });
+
+  it("handles a single-word name and a nameless player", () => {
+    expect(markerLabel({ shirtNumber: null, playerName: "Ronaldinho" })).toBe("RO");
+    expect(markerLabel({ shirtNumber: null, playerName: "   " })).toBe("?");
+  });
+
+  it("keeps zero as a number rather than treating it as absent", () => {
+    // 0 is a legitimate squad number, and `?? "?"` would drop it.
+    expect(markerLabel({ shirtNumber: 0, playerName: "Keeper" })).toBe("0");
   });
 });

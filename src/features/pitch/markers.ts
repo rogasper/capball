@@ -60,3 +60,31 @@ export function markerOffsets(
     point: [item.imageU * rect.w, item.imageV * rect.h],
   }));
 }
+
+/**
+ * What goes inside a player's marker.
+ *
+ * A shirt number is the natural label, but a squad entered by hand often has
+ * none — and two markers reading "?" cannot be told apart, which is the one
+ * thing a marker exists to prevent. A player without a number is identified by
+ * their initials instead (FR-30.3). Shared by the pitch view and the overlay on
+ * the video, so the two surfaces name a player the same way.
+ */
+export function markerLabel(position: { shirtNumber: number | null; playerName: string }): string {
+  if (position.shirtNumber !== null) return String(position.shirtNumber);
+
+  const parts = position.playerName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+/**
+ * What a team without a colour is drawn in.
+ *
+ * Shared deliberately: this used to be `currentColor` on the pitch (near-white in
+ * the dark theme) and a hard-coded near-black on the video, so the *same* team
+ * looked white in one place and black in the other. A neutral has to be a
+ * decision, not a fallback of whatever the surface happened to use.
+ */
+export const NEUTRAL_TEAM_COLOUR = "#64748B";
