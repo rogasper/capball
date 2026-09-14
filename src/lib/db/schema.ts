@@ -3,6 +3,7 @@ import {
   type AnySQLiteColumn,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -237,6 +238,29 @@ export const annotations = sqliteTable(
  * derived at runtime, so a better model later can be fitted from the same clicks
  * without asking the user to pick again (technical-design-R1 D19).
  */
+/**
+ * A drawing's own time on screen (R2, FR-20.16).
+ *
+ * R1 resolves a shape's window from the **event's** anchor, which was exact while
+ * every event was a moment — the event's anchor was the instant the user drew at.
+ * A phase's anchor is where the passage *started*, so a drawing made inside a long
+ * passage resolved to the wrong time, and nothing recorded when it was drawn.
+ *
+ * A row here means "this drawing is on screen exactly here": its presence **is**
+ * the mode, which is why `annotations.window_mode` keeps its three R1 values and
+ * an existing drawing is never rewritten. Deleting the row restores the previous
+ * behaviour, so the feature is additive in both directions.
+ */
+export const annotationWindows = sqliteTable("annotation_windows", {
+  annotationId: integer("annotation_id")
+    .primaryKey()
+    .references(() => annotations.id, { onDelete: "cascade" }),
+  /** Absolute footage times, clamped to the video when they are written. */
+  startMs: integer("start_ms").notNull(),
+  endMs: integer("end_ms").notNull(),
+  createdAt,
+});
+
 export const calibrations = sqliteTable(
   "calibrations",
   {
@@ -327,6 +351,76 @@ export const positions = sqliteTable(
     uniqueIndex("positions_uid_unique").on(table.uid),
     uniqueIndex("positions_event_player_unique").on(table.eventId, table.playerId),
     index("positions_event_idx").on(table.eventId),
+  ],
+);
+
+/**
+ * Which tags are **phases** (R2, FR-55.1).
+ *
+ * A row means "this tag opens a phase": pressing its key starts a span that runs
+ * until it is stopped, so the event's range is a real duration rather than
+ * pre-roll and post-roll. The kind is a row and not a column on `tags` because
+ * the migration runner retries an interrupted file from its first statement, so
+ * `ALTER TABLE ADD COLUMN` can never be re-run — see ADR 0012 and D26's precedent.
+ */
+export const phaseTags = sqliteTable("phase_tags", {
+  tagId: integer("tag_id")
+    .primaryKey()
+    .references(() => tags.id, { onDelete: "cascade" }),
+  createdAt,
+});
+
+/**
+ * An action recorded inside a phase (R2, FR-55.3).
+ *
+ * The primary key is the **pair**, not a `parent_id` on the event: a press while
+ * the opponent's phase is open belongs to that possession, and storage must not
+ * forbid an action that belongs to two phases (OQ-R2-16).
+ */
+export const eventParents = sqliteTable(
+  "event_parents",
+  {
+    childId: integer("child_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    parentId: integer("parent_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.childId, table.parentId] }),
+    index("event_parents_parent_idx").on(table.parentId),
+  ],
+);
+
+/**
+ * A phase that is running, and how it ended (R2, FR-55.4).
+ *
+ * `closed_by` is null while the phase is open, and the partial unique index is
+ * what makes "one open phase per stream" a constraint rather than a convention —
+ * two teams may run together, a second phase of one team closes the first.
+ * `last_seen_ms` is the last playback position recorded while open, so an
+ * interrupted phase is closed at what was observed and never at the end of the
+ * video. This table never travels in a transfer: "still running" is a fact about
+ * one instance, not about the analysis.
+ */
+export const phaseSessions = sqliteTable(
+  "phase_sessions",
+  {
+    eventId: integer("event_id")
+      .primaryKey()
+      .references(() => events.id, { onDelete: "cascade" }),
+    /** `team:<id>`, or `team:none` when no team is active. */
+    streamKey: text("stream_key").notNull(),
+    openedAtMs: integer("opened_at_ms").notNull(),
+    lastSeenMs: integer("last_seen_ms").notNull(),
+    /** `user` | `new-phase` | `video-end` | `exit` | `empty`, null while open. */
+    closedBy: text("closed_by"),
+  },
+  (table) => [
+    uniqueIndex("phase_sessions_open_stream_unique")
+      .on(table.streamKey)
+      .where(sql`${table.closedBy} IS NULL`),
   ],
 );
 

@@ -18,6 +18,24 @@ export function formatTimecode(ms: number): string {
 }
 
 /**
+ * Formats a **duration** as `MM:SS`, or `H:MM:SS` past an hour.
+ *
+ * A duration is not a timecode: "12:31" is twelve and a half minutes of
+ * football, while `formatTimecode` would print `00:12:31.000` and invite it to be
+ * read as a position. The two are kept apart on purpose wherever a phase's
+ * length is shown next to a moment in the match (FR-50.5).
+ */
+export function formatDurationMs(ms: number): string {
+  const safe = Math.max(0, Math.round(ms));
+  const hours = Math.floor(safe / 3_600_000);
+  const minutes = Math.floor((safe % 3_600_000) / 60_000);
+  const seconds = Math.floor((safe % 60_000) / 1000);
+
+  const base = `${pad(minutes)}:${pad(seconds)}`;
+  return hours > 0 ? `${hours}:${base}` : base;
+}
+
+/**
  * Parses `MM:SS`, `H:MM:SS`, or either with `.mmm` / `.s` fractions.
  * Returns null for anything it cannot read confidently.
  */
@@ -60,6 +78,17 @@ export function clipRange(
     startMs: Math.round(start),
     endMs: Math.round(Math.max(start, end)),
   };
+}
+
+/** Clamps an explicit range to the video, keeping it ordered and non-negative. */
+export function clampRangeToVideo(
+  startMs: number,
+  endMs: number,
+  durationMs: number,
+): { startMs: number; endMs: number } {
+  const start = Math.max(0, Math.min(startMs, durationMs > 0 ? durationMs : startMs));
+  const end = Math.max(start, Math.min(endMs, durationMs > 0 ? durationMs : endMs));
+  return { startMs: Math.round(start), endMs: Math.round(end) };
 }
 
 /** Moves the playhead by one frame, staying inside the video. */

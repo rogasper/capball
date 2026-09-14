@@ -13,6 +13,7 @@ import {
   ELLIPSE_SAMPLES,
   geometrySpaceProblem,
   pitchShapeAt,
+  pitchShapeAtPoint,
   projectShape,
   projectShapes,
   shapeOutline,
@@ -404,5 +405,67 @@ describe("clicking a projected shape (FR-80.3)", () => {
     const points = summary.primitives[0]?.points ?? [];
     if (points.length === 0) return;
     expect(pitchShapeAt(summary, centroidInPixels(points), RECT, 8)).toBe(2);
+  });
+});
+
+describe("clicking a shape on the ground, in metres (FR-80.1)", () => {
+  it("selects a closed shape from inside it", () => {
+    const zone = shape("rect", boxGeometry([-20, -10], [20, 10]), { fill: "#4C8DFF33" });
+    expect(pitchShapeAtPoint([zone], [0, 0], 0.5)).toBe(1);
+  });
+
+  it("selects a shape from inside it even with no fill, because it is a region", () => {
+    const zone = shape("rect", boxGeometry([-20, -10], [20, 10]));
+    expect(pitchShapeAtPoint([zone], [0, 0], 0.5)).toBe(1);
+  });
+
+  it("needs to be near an open shape, which encloses nothing", () => {
+    const line = shape(
+      "line",
+      pathGeometry([
+        [-20, 0],
+        [20, 0],
+      ]),
+    );
+    // A metre of tolerance is a generous click; ten metres away is not a click.
+    expect(pitchShapeAtPoint([line], [0, 0.8], 1)).toBe(1);
+    expect(pitchShapeAtPoint([line], [0, 10], 1)).toBeNull();
+  });
+
+  it("returns nothing on empty grass", () => {
+    const zone = shape("rect", boxGeometry([-20, -10], [20, 10]));
+    expect(pitchShapeAtPoint([zone], [40, 30], 0.5)).toBeNull();
+  });
+
+  it("prefers the shape painted last", () => {
+    const under = shape("rect", boxGeometry([-20, -10], [20, 10]));
+    const over = { ...shape("rect", boxGeometry([-20, -10], [20, 10])), id: 2, z: 9 };
+    expect(pitchShapeAtPoint([under, over], [0, 0], 0.5)).toBe(2);
+  });
+});
+
+describe("the line style and the label survive the projection (FR-20.14, FR-20.15)", () => {
+  it("carries the dash and the words onto the frame", () => {
+    // A dashed run drawn on the pitch view must still be dashed over the frame,
+    // and its label must not be lost by changing surface: both travel on the
+    // primitive, which is the only thing the renderer ever sees.
+    const drawn = shape(
+      "line",
+      pathGeometry([
+        [0, 0],
+        [10, 4],
+      ]),
+      {
+        strokePattern: "dashed",
+      },
+    );
+    drawn.label = "Cover shadow";
+
+    const projected = projectShape(drawn, storedHomography(), FRAME, REGION);
+
+    expect(projected.ok).toBe(true);
+    if (!projected.ok) return;
+    expect(projected.primitive.strokePattern).toBe("dashed");
+    expect(projected.primitive.label).toBe("Cover shadow");
   });
 });

@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/select";
 import type { Tag, TagCategory } from "@/lib/db/queries/taxonomy";
 import { collectSubtreeIds, tagDeletionImpact } from "@/lib/taxonomy/rules";
+import { cn } from "@/lib/utils";
+import { usePhaseStore } from "@/stores/phaseStore";
 import { useTagStore } from "@/stores/tagStore";
 
 /** Click, then press the key you want. Conflicts are refused by the store. */
@@ -47,10 +49,16 @@ function ShortcutBinding({ tag }: { tag: Tag }) {
 
   return (
     <span className="flex items-center gap-1">
+      {/* A tag with no key is the common case, so its button is quiet until it is
+          wanted: a bordered "bind" on every row is what made the panel read as a
+          grid of boxes. A bound key keeps its border, because it is a fact. */}
       <Button
-        variant={listening ? "default" : "outline"}
+        variant={listening ? "default" : tag.shortcutKey ? "outline" : "ghost"}
         size="xs"
-        className="min-w-14 font-mono"
+        className={cn(
+          "min-w-14 font-mono",
+          !listening && !tag.shortcutKey && "text-muted-foreground hover:border-border",
+        )}
         onClick={() => setListening(true)}
       >
         {listening ? "press…" : (tag.shortcutKey ?? "bind")}
@@ -163,10 +171,16 @@ function TagRow({
 }) {
   const renameTag = useTagStore((state) => state.renameTag);
   const setParent = useTagStore((state) => state.setParent);
+  const isPhase = usePhaseStore((state) => state.phaseTagIds.includes(tag.id));
+  const setPhaseTag = usePhaseStore((state) => state.setPhaseTag);
 
   // A tag cannot be nested under itself or under one of its own descendants.
   const excluded = collectSubtreeIds(categoryTags, tag.id);
   const parentingOptions = categoryTags.filter((candidate) => !excluded.has(candidate.id));
+  const parentLabel =
+    tag.parentId === null
+      ? "Top level"
+      : `under ${categoryTags.find((candidate) => candidate.id === tag.parentId)?.name ?? "another tag"}`;
 
   return (
     <li
@@ -182,17 +196,53 @@ function TagRow({
         <span className="flex min-w-0 flex-1 text-body">
           <EditableName value={tag.name} onCommit={(next) => void renameTag(tag.id, next)} />
         </span>
+        {/* How the tag is captured (FR-55.1), said as behaviour rather than as a
+            noun: a button labelled "phase" reads as a command to start one, which
+            is how a passage was lost by pressing it mid-recording. It sits on the
+            name's line so the line below has the whole width for a parent name. */}
+        <Select
+          value={isPhase ? "phase" : "moment"}
+          onValueChange={(value) => void setPhaseTag(tag.id, value === "phase")}
+        >
+          <SelectTrigger
+            size="sm"
+            className={cn(
+              "h-6 w-36 shrink-0 text-label",
+              !isPhase && "border-transparent text-muted-foreground hover:border-input",
+            )}
+            title={
+              isPhase
+                ? "Captured by pressing its key to start, and again to stop"
+                : "Captured with a single press, like every tag before phases"
+            }
+            aria-label={`How ${tag.name} is captured`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="moment">One press</SelectItem>
+            <SelectItem value="phase">Until stopped</SelectItem>
+          </SelectContent>
+        </Select>
         <TagDeleteDialog tag={tag} allTags={allTags} />
       </div>
 
-      <div className="mt-0.5 flex items-center gap-2 pl-4">
+      {/* Where the tag sits and which key captures it. Both are sized so the
+          panel never has to scroll sideways: the parent shrinks and ellipsises
+          (its tooltip has the full name), the key is as wide as its own text. */}
+      <div className="mt-0.5 flex items-center gap-1.5 pl-3">
         <Select
           value={tag.parentId === null ? "root" : String(tag.parentId)}
           onValueChange={(value) => void setParent(tag.id, value === "root" ? null : Number(value))}
         >
           <SelectTrigger
             size="sm"
-            className="h-6 w-28 text-label"
+            className={cn(
+              "h-6 min-w-0 flex-1 text-label",
+              tag.parentId === null &&
+                "border-transparent text-muted-foreground hover:border-input",
+            )}
+            title={parentLabel}
             aria-label={`Where ${tag.name} sits`}
           >
             <SelectValue />

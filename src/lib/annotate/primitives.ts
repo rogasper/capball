@@ -1,5 +1,5 @@
 import { absolutePoints, type Point } from "./geometry";
-import type { Annotation, FillPattern } from "./types";
+import type { Annotation, FillPattern, StrokePattern } from "./types";
 import { isVisibleAt, type WindowContext } from "./window";
 
 /**
@@ -18,17 +18,26 @@ type PrimitiveBase = {
   fill: string | null;
   /** Stroke width as a fraction of the frame's width. */
   width: number;
+  /**
+   * Font size as a fraction of the frame's height. A text shape's words, and the
+   * size of a label chip on any other shape (FR-20.15).
+   */
+  fontSize: number;
   /** How the fill is painted (FR-20.12). `solid` is R1's behaviour. */
   fillPattern: FillPattern;
   /** Hatch spacing as a fraction of the picture width. */
   patternScale: number;
   /** Hatch angle in radians. */
   patternAngle: number;
+  /** The line's own pattern (FR-20.14). `solid` is every style written before R2. */
+  strokePattern: StrokePattern;
   /** Rotation origin, in normalised frame coordinates. */
   center: Point;
   rotation: number;
   /** The annotation this came from, so a hit can be mapped back to a layer. */
   annotationId: number;
+  /** The words attached to the shape (FR-20.15); drawn for every kind but text. */
+  label: string | null;
 };
 
 export type Primitive =
@@ -48,8 +57,6 @@ export type Primitive =
       x: number;
       y: number;
       text: string;
-      /** Font size as a fraction of the frame's height. */
-      fontSize: number;
     });
 
 function base(annotation: Annotation): PrimitiveBase {
@@ -60,12 +67,15 @@ function base(annotation: Annotation): PrimitiveBase {
     stroke: style.stroke,
     fill: style.fill,
     width: style.width,
+    fontSize: style.fontSize,
     fillPattern: style.fillPattern,
     patternScale: style.patternScale,
     patternAngle: style.patternAngle,
+    strokePattern: style.strokePattern,
     center: [geometry.x + geometry.w / 2, geometry.y + geometry.h / 2],
     rotation: geometry.rotation,
     annotationId: annotation.id,
+    label: annotation.label,
   };
 }
 
@@ -86,7 +96,6 @@ export function toPrimitive(annotation: Annotation): Primitive {
         x: geometry.x,
         y: geometry.y,
         text: annotation.label ?? "",
-        fontSize: annotation.style.fontSize,
       };
     case "polygon":
       return {

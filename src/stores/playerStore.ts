@@ -15,6 +15,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   paused: true,
   durationMs: 0,
   rate: 1,
+  ended: false,
   error: null,
   apply: (state) => set(state),
 }));

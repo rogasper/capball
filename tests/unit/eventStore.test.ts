@@ -9,6 +9,7 @@ import {
   NO_FILTERS,
   useEventStore,
 } from "@/stores/eventStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 
 // The query module is the only thing this store touches, so mocking it keeps the
 // capture rules testable without a database.
@@ -175,7 +176,9 @@ describe("adjustEnd", () => {
 
     await useEventStore.getState().adjustEnd(31, 1_000);
 
-    expect(updateEventRange).toHaveBeenCalledWith(31, 92_000, 113_000);
+    // The anchor is written with the range, always: adjusting the end past the
+    // moment would otherwise leave a stored anchor outside its own clip.
+    expect(updateEventRange).toHaveBeenCalledWith(31, 92_000, 113_000, 100_000);
     expect(useEventStore.getState().events[0]?.endMs).toBe(113_000);
   });
 
@@ -236,5 +239,59 @@ describe("filters", () => {
     useEventStore.setState({ filters: { tagIds: [2], teamId: 8, playerId: 22 } });
     useEventStore.getState().clearFilters();
     expect(useEventStore.getState().filters).toEqual(NO_FILTERS);
+  });
+});
+
+describe("splitting an event", () => {
+  it("makes two events at the split, and the first half keeps the drawings", async () => {
+    // A new half has to belong to a match, and a row does not carry its own.
+    useLibraryStore.setState({
+      currentMatch: {
+        id: 1,
+        homeTeamId: 7,
+        awayTeamId: 8,
+        competition: null,
+        season: null,
+        kickoffAt: null,
+        venue: null,
+        notes: null,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    });
+    let nextId = 31;
+    createEvent.mockImplementation(async () => nextId++);
+    updateEventRange.mockResolvedValue(undefined);
+    await useEventStore.getState().insert(draft());
+
+    await useEventStore.getState().splitEvent(31, 105_000);
+
+    // The original is trimmed to the split; its moment is still inside it.
+    expect(updateEventRange).toHaveBeenCalledWith(31, 92_000, 105_000, 100_000);
+
+    const events = useEventStore.getState().events;
+    expect(events).toHaveLength(2);
+    const second = events.find((event) => event.id !== 31);
+    expect(second).toMatchObject({
+      startMs: 105_000,
+      endMs: 112_000,
+      anchorMs: 105_000,
+      // Nothing has to be re-tagged to carry on with the second half.
+      tagName: "High Press",
+      teamName: "Manchester United",
+      playerName: "Saka",
+    });
+    // Drawings and positions belong to the first half, which is why it keeps its id.
+    expect(events[0]?.id === 31 || events[1]?.id === 31).toBe(true);
+  });
+
+  it("refuses a split outside the clip, and says why", async () => {
+    createEvent.mockResolvedValue(31);
+    await useEventStore.getState().insert(draft());
+
+    await useEventStore.getState().splitEvent(31, 200_000);
+
+    expect(useEventStore.getState().events).toHaveLength(1);
+    expect(useEventStore.getState().error).toMatch(/inside its own clip range/i);
   });
 });

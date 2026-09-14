@@ -7,9 +7,10 @@ import { clipRange } from "@/lib/time/timecode";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { usePhaseStore } from "@/stores/phaseStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useTagStore } from "@/stores/tagStore";
-import { buildEventDraft } from "./captureContext";
+import { captureWithPhase, togglePhase } from "./phaseCapture";
 
 /**
  * One keystroke, one event (FR-5).
@@ -18,21 +19,28 @@ import { buildEventDraft } from "./captureContext";
  * player's live position comes from the playback controller rather than React
  * state — so a capture records the moment the key was pressed, not the moment
  * the UI last rendered.
+ *
+ * Two kinds of tag share this path (FR-55.1): a **phase** starts or stops a
+ * passage, and a **moment** is recorded — inside a running phase when one
+ * applies, otherwise with the usual pre-roll and post-roll.
  */
 async function captureNow(tag: Tag): Promise<void> {
-  const { insert, reportError } = useEventStore.getState();
+  const { reportError } = useEventStore.getState();
   const settings = useSettingsStore.getState();
   const durationMs = useLibraryStore.getState().probe?.durationMs ?? playback.durationMs;
 
   // One reading of the playhead, so the moment and the range around it agree.
   const anchorMs = playback.timeMs;
-  const times = {
-    anchorMs,
-    ...clipRange(anchorMs, settings.preRollMs, settings.postRollMs, durationMs),
-  };
+
+  if (usePhaseStore.getState().isPhase(tag.id)) {
+    await togglePhase(tag, anchorMs);
+    return;
+  }
+
+  const times = clipRange(anchorMs, settings.preRollMs, settings.postRollMs, durationMs);
 
   try {
-    await insert(buildEventDraft(tag, times));
+    await captureWithPhase({ tag, anchorMs, startMs: times.startMs, endMs: times.endMs });
   } catch (error) {
     reportError(error instanceof Error ? error.message : String(error));
   }

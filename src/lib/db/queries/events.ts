@@ -91,12 +91,25 @@ export async function createEvent(input: NewEvent): Promise<number> {
   return row.id;
 }
 
-export async function updateEventRange(id: number, startMs: number, endMs: number): Promise<void> {
+/**
+ * Writes an event's clip range, and optionally the moment inside it.
+ *
+ * The anchor is part of the same statement because dragging a span moves the
+ * moment with it: the two are one fact about the event, and a row written with a
+ * new range and an old anchor would put the playhead outside the clip.
+ */
+export async function updateEventRange(
+  id: number,
+  startMs: number,
+  endMs: number,
+  anchorMs?: number,
+): Promise<void> {
   await db
     .update(events)
     .set({
       startMs: Math.round(startMs),
       endMs: Math.round(endMs),
+      ...(anchorMs === undefined ? {} : { anchorMs: Math.round(anchorMs) }),
       updatedAt: Math.floor(Date.now() / 1000),
     })
     .where(eq(events.id, id));

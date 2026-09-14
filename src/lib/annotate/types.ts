@@ -35,6 +35,22 @@ export type WindowMode = (typeof WINDOW_MODES)[number];
 export const FILL_PATTERNS = ["solid", "hatch", "crossHatch"] as const;
 export type FillPattern = (typeof FILL_PATTERNS)[number];
 
+/**
+ * How a **stroke** is painted (FR-20.14, R2).
+ *
+ * In football notation the line style is the vocabulary: solid for the ball
+ * played, dashed for a player's run, dotted for a carry, dash-dot for pressure.
+ * It is a style rather than a shape kind because every one of them is the same
+ * geometry, and because the dash is measured in stroke widths it renders the
+ * same in the preview and in the export (D17's rule, applied to the dash).
+ */
+export const STROKE_PATTERNS = ["solid", "dashed", "dotted", "dashDot"] as const;
+export type StrokePattern = (typeof STROKE_PATTERNS)[number];
+
+export function isStrokePattern(value: unknown): value is StrokePattern {
+  return typeof value === "string" && (STROKE_PATTERNS as readonly string[]).includes(value);
+}
+
 /** Hatch spacing as a fraction of the picture's width, and the line angle. */
 export const DEFAULT_PATTERN_SCALE = 0.02;
 export const DEFAULT_PATTERN_ANGLE = -Math.PI / 4;
@@ -55,6 +71,8 @@ export type AnnotationStyle = {
   patternScale: number;
   /** Radians, counter-clockwise from the horizontal. */
   patternAngle: number;
+  /** The line's own pattern (FR-20.14); `solid` is every style written before R2. */
+  strokePattern: StrokePattern;
 };
 
 /**
@@ -98,10 +116,26 @@ export function isAnnotationSpace(value: unknown): value is AnnotationSpace {
   return typeof value === "string" && (ANNOTATION_SPACES as readonly string[]).includes(value);
 }
 
+/** The range a drawing is on screen for, or null when it follows its event. */
+export function ownWindowOf(annotation: Annotation): TimeWindow | null {
+  const window = annotation.ownWindow;
+  if (!window) return null;
+  const startMs = Math.round(window.startMs);
+  const endMs = Math.round(window.endMs);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  return endMs >= startMs ? { startMs, endMs } : { startMs: endMs, endMs: startMs };
+}
+
 /** The space a geometry is in, defaulting to the frame for every R1 row. */
 export function spaceOf(geometry: Geometry): AnnotationSpace {
   return isAnnotationSpace(geometry.space) ? geometry.space : "frame";
 }
+
+/**
+ * A span of footage. Kept here rather than in `window.ts` so an annotation can
+ * carry one without the two modules importing each other.
+ */
+export type TimeWindow = { startMs: number; endMs: number };
 
 /** An annotation as the UI and the renderer see it. */
 export type Annotation = {
@@ -111,6 +145,17 @@ export type Annotation = {
   kind: ShapeKind;
   windowMode: WindowMode;
   windowMs: number;
+  /**
+   * The span this drawing is on screen for, when it has one of its own
+   * (FR-20.16). A row in `annotation_windows` rather than a column, and its
+   * presence wins over `windowMode` — so `windowMode` keeps its R1 values and a
+   * drawing without a range behaves exactly as it did before this existed.
+   *
+   * Optional, like `geometry.space`: absent means "no range of its own", which is
+   * every drawing written before this release, and it is read through
+   * `ownWindowOf` rather than directly.
+   */
+  ownWindow?: TimeWindow | null;
   geometry: Geometry;
   style: AnnotationStyle;
   label: string | null;
@@ -129,6 +174,7 @@ export const DEFAULT_STYLE: AnnotationStyle = {
   fillPattern: "solid",
   patternScale: DEFAULT_PATTERN_SCALE,
   patternAngle: DEFAULT_PATTERN_ANGLE,
+  strokePattern: "solid",
 };
 
 export function isFillPattern(value: unknown): value is FillPattern {
@@ -154,6 +200,7 @@ export function normaliseStyle(
   return {
     ...merged,
     fillPattern: isFillPattern(merged.fillPattern) ? merged.fillPattern : "solid",
+    strokePattern: isStrokePattern(merged.strokePattern) ? merged.strokePattern : "solid",
     patternScale: Math.max(0.002, finite(merged.patternScale, DEFAULT_PATTERN_SCALE)),
     patternAngle: finite(merged.patternAngle, DEFAULT_PATTERN_ANGLE),
   };

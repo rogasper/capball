@@ -3,8 +3,8 @@ import {
   clampViewport,
   fitToDuration,
   followPlayhead,
-  layoutMarkers,
   layoutTicks,
+  layoutTracks,
   MAX_PX_PER_MS,
   panBy,
   TICK_LABEL_GAP_PX,
@@ -13,6 +13,7 @@ import {
   type Viewport,
   viewEndMs,
   xToTime,
+  zoomAnchorX,
   zoomAt,
 } from "@/features/timeline/scale";
 
@@ -119,50 +120,6 @@ describe("followPlayhead", () => {
   });
 });
 
-describe("layoutMarkers", () => {
-  const events = Array.from({ length: 500 }, (_, index) => ({
-    id: index + 1,
-    anchorMs: Math.round((index / 500) * match),
-  }));
-
-  it("draws every event separately when there is room", () => {
-    // Zoomed in so the 500 events are spread far apart.
-    const laid = layoutMarkers(events, view({ pxPerMs: 0.05, viewStartMs: 0 }));
-    expect(laid.length).toBeGreaterThan(0);
-    expect(laid.every((item) => item.kind === "marker" || item.kind === "cluster")).toBe(true);
-  });
-
-  it("bounds the rendered items when zoomed out, however many events there are", () => {
-    const laid = layoutMarkers(events, fitToDuration(width, match));
-    const budget = Math.ceil(width / 5) + 1;
-    expect(laid.length).toBeLessThanOrEqual(budget);
-  });
-
-  it("keeps every event accounted for in the buckets", () => {
-    const laid = layoutMarkers(events, fitToDuration(width, match));
-    const counted = laid.reduce(
-      (total, item) => total + (item.kind === "cluster" ? item.eventIds.length : 1),
-      0,
-    );
-    expect(counted).toBe(events.length);
-  });
-
-  it("skips what is outside the viewport", () => {
-    const laid = layoutMarkers(events, view({ pxPerMs: 0.05, viewStartMs: 0 }));
-    for (const item of laid) {
-      expect(item.x).toBeGreaterThan(-10);
-      expect(item.x).toBeLessThan(width + 10);
-    }
-  });
-
-  it("is unaffected by the order the events arrive in", () => {
-    const shuffled = [...events].reverse();
-    expect(layoutMarkers(shuffled, fitToDuration(width, match))).toEqual(
-      layoutMarkers(events, fitToDuration(width, match)),
-    );
-  });
-});
-
 describe("layoutTicks", () => {
   it("keeps the tick count readable at any zoom", () => {
     for (const pxPerMs of [0.00002, 0.0005, 0.01, 0.2]) {
@@ -219,5 +176,104 @@ describe("layoutTicks", () => {
     const unique = new Set(gaps);
     expect(unique.size).toBe(1);
     expect([100, 250, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000]).toContain(gaps[0]);
+  });
+});
+
+describe("laying the timeline out as tracks", () => {
+  // 1 000 px over 100 s: 0.01 px per ms, the same scale the other tests use.
+  const tracksView = view({ viewStartMs: 0, pxPerMs: 0.01, widthPx: 1_000, durationMs: 100_000 });
+
+  const TAGS = [
+    { id: 1, name: "Attack", color: "#4C8DFF", shortcutKey: "1" },
+    { id: 2, name: "Pass", color: "#34D399", shortcutKey: "2" },
+    { id: 3, name: "Unused", color: null, shortcutKey: null },
+  ];
+
+  function event(id: number, tagId: number, startMs: number, endMs: number) {
+    return { id, tagId, startMs, endMs, anchorMs: Math.round((startMs + endMs) / 2) };
+  }
+
+  it("gives every tag its own track, in the taxonomy's order", () => {
+    const tracks = layoutTracks(
+      [event(1, 2, 10_000, 20_000), event(2, 1, 0, 30_000)],
+      TAGS,
+      tracksView,
+    );
+    // The order is the user's, not the order the events happened in.
+    expect(tracks.map((track) => track.label)).toEqual(["Attack", "Pass"]);
+    expect(tracks.map((track) => track.tagId)).toEqual([1, 2]);
+  });
+
+  it("leaves out a tag with nothing to show, rather than an empty lane", () => {
+    const tracks = layoutTracks([event(1, 1, 0, 10_000)], TAGS, tracksView);
+    expect(tracks.map((track) => track.label)).toEqual(["Attack"]);
+  });
+
+  it("draws each bar from the clip's start to its end, with the moment inside", () => {
+    const [track] = layoutTracks([event(1, 1, 10_000, 30_000)], TAGS, tracksView);
+    expect(track?.bars).toHaveLength(1);
+    expect(track?.bars[0]?.left).toBeCloseTo(100);
+    expect(track?.bars[0]?.width).toBeCloseTo(200);
+    expect(track?.bars[0]?.anchorX).toBeCloseTo(200);
+    expect(track?.bars[0]?.row).toBe(0);
+  });
+
+  it("keeps a tag's overlapping events in sub-rows of its own track", () => {
+    const [track] = layoutTracks(
+      [event(1, 1, 0, 30_000), event(2, 1, 20_000, 50_000), event(3, 1, 60_000, 70_000)],
+      TAGS,
+      tracksView,
+    );
+    const rowOf = (id: number) => track?.bars.find((bar) => bar.eventId === id)?.row;
+    expect(rowOf(1)).toBe(0);
+    expect(rowOf(2)).toBe(1);
+    // The third starts after the first finished, so it shares row 0.
+    expect(rowOf(3)).toBe(0);
+    expect(track?.rows).toBe(2);
+  });
+
+  it("keeps a zoomed-out event clickable rather than invisible", () => {
+    const zoomedOut = view({
+      viewStartMs: 0,
+      pxPerMs: 800 / (90 * 60_000),
+      widthPx: 800,
+      durationMs: 90 * 60_000,
+    });
+    const [track] = layoutTracks([event(1, 1, 1_000_000, 1_001_000)], TAGS, zoomedOut);
+    expect(track?.bars[0]?.width).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps a track whose events are out of view, with an empty lane", () => {
+    // A lane that vanishes as you zoom reads as the timeline losing its tracks;
+    // an empty lane is what tells you where to scroll back to.
+    const tracks = layoutTracks([event(1, 1, 200_000, 210_000)], TAGS, tracksView);
+    expect(tracks.map((track) => track.label)).toEqual(["Attack"]);
+    expect(tracks[0]?.bars).toEqual([]);
+    expect(tracks[0]?.eventCount).toBe(1);
+  });
+});
+
+describe("where a zoom holds the view still", () => {
+  // A fifty-minute match at a fitted zoom is a hundredth of a pixel per
+  // millisecond: the zoom buttons are the only practical way in, and if they
+  // anchor on the middle of the lane the playhead walks off screen every press.
+  const view: Viewport = { viewStartMs: 0, pxPerMs: 0.001, widthPx: 800, durationMs: match };
+
+  it("anchors on the playhead when it is in view", () => {
+    expect(zoomAnchorX(view, 200_000)).toBeCloseTo(200, 6);
+  });
+
+  it("anchors on the middle of the lane when the playhead is not in view", () => {
+    expect(zoomAnchorX(view, 5_000_000)).toBe(400);
+    expect(zoomAnchorX({ ...view, viewStartMs: 300_000 }, 10_000)).toBe(400);
+  });
+
+  it("keeps the moment under the playhead where it was", () => {
+    // The property the anchor exists for, asserted directly: zoom in and the time
+    // under that x is unchanged.
+    const anchorX = zoomAnchorX(view, 200_000);
+    const before = xToTime(anchorX, view);
+    const after = xToTime(anchorX, zoomAt(view, 1.6, anchorX));
+    expect(after).toBeCloseTo(before, 6);
   });
 });

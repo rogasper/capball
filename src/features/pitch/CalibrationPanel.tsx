@@ -168,8 +168,15 @@ export function CalibrationPanel() {
 
         <div className="flex items-center gap-2">
           <Select value={pendingFeature ?? ""} onValueChange={(value) => startPicking(value)}>
-            <SelectTrigger size="sm" className="h-7 flex-1 text-label" aria-label="Pitch feature">
-              <SelectValue placeholder="Choose a feature, then click it on the frame" />
+            {/* `min-w-0` is what lets this shrink: a flex item's automatic
+                minimum is its content, and the long placeholder was pushing the
+                whole sidebar wider than itself, which scrolled the panel. */}
+            <SelectTrigger
+              size="sm"
+              className="h-7 min-w-0 flex-1 text-label"
+              aria-label="Pitch feature"
+            >
+              <SelectValue placeholder="Choose a feature…" />
             </SelectTrigger>
             <SelectContent>
               {groups.map((group) => (

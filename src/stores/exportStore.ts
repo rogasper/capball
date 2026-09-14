@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { listAnnotations } from "@/lib/db/queries/annotations";
+import { listAnnotations, listAnnotationWindows } from "@/lib/db/queries/annotations";
 import type { EventRow } from "@/lib/db/queries/events";
 import {
   describeConflicts,
@@ -10,7 +10,9 @@ import {
 import { buildOverlayPlan, enableExpression } from "@/lib/export/overlay";
 import { type ExportMode, ipc } from "@/lib/ipc";
 import { awaitJob } from "@/lib/jobs/jobEvents";
+import { resolveWindow } from "@/lib/phases/rules";
 import { renderOverlayPng } from "@/lib/render/burnIn";
+import { usePhaseStore } from "@/stores/phaseStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
@@ -98,6 +100,8 @@ export const useExportStore = create<ExportState>((set, get) => ({
       exportExtraAfterMs: extraAfterMs,
       exportConcatenate: concatenate,
       exportAnnotations: burnIn,
+      preRollMs,
+      postRollMs,
     } = useSettingsStore.getState();
 
     if (!sourcePath) {
@@ -174,7 +178,22 @@ export const useExportStore = create<ExportState>((set, get) => ({
         const event = ordered[index];
         if (!event) continue;
 
-        const range = paddedRange(event, extraBeforeMs, extraAfterMs, durationMs);
+        // The window this event actually covers (D41): a phase is its own span, a
+        // moment keeps the range it was captured with, and an action — which
+        // stores the instant rather than a range — gets the pre-roll and post-roll
+        // resolved here. Existing R0 events resolve to exactly their stored range,
+        // so their clips are unchanged.
+        const window = resolveWindow(
+          {
+            startMs: event.startMs,
+            endMs: event.endMs,
+            anchorMs: event.anchorMs,
+            kind: usePhaseStore.getState().isPhase(event.tagId) ? "phase" : "event",
+          },
+          { preRollMs, postRollMs },
+          durationMs,
+        );
+        const range = paddedRange(window, extraBeforeMs, extraAfterMs, durationMs);
         const output = joinPath(destination, item.fileName);
         set({ currentLabel: item.fileName, stepProgress: 0 });
 
@@ -185,12 +204,26 @@ export const useExportStore = create<ExportState>((set, get) => ({
         let effectiveMode: ExportMode = mode;
 
         if (burnIn) {
-          const annotations = await listAnnotations(event.id);
+          // A drawing's own range is loaded in the same step (FR-20.16): without
+          // it the burn-in would resolve the shape from the event's anchor and
+          // put it somewhere the app never showed, which is the one thing the
+          // overlay plan exists to prevent.
+          const [rows, windows] = await Promise.all([
+            listAnnotations(event.id),
+            listAnnotationWindows(event.id),
+          ]);
+          const annotations = rows.map((row) => ({
+            ...row,
+            ownWindow: windows.get(row.id) ?? null,
+          }));
           if (annotations.length > 0) {
             const plan = buildOverlayPlan(annotations, {
               anchorMs: event.anchorMs,
-              eventStartMs: event.startMs,
-              eventEndMs: event.endMs,
+              // The resolved window, not the stored range: an action's drawings
+              // belong to the clip the export is making, and a zero-length range
+              // would collapse every `"event"` and `"clip"` window inside it.
+              eventStartMs: window.startMs,
+              eventEndMs: window.endMs,
               durationMs,
               clipStartMs: range.startMs,
               clipEndMs: range.endMs,

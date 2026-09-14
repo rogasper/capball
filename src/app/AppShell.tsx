@@ -18,6 +18,7 @@ import { SettingsPanel } from "@/features/settings/SettingsPanel";
 import { ActiveContext } from "@/features/tagging/ActiveContext";
 import { CaptureStatus } from "@/features/tagging/CaptureStatus";
 import { useCaptureKeys } from "@/features/tagging/useCaptureKeys";
+import { usePhaseClock } from "@/features/tagging/usePhaseClock";
 import { TaxonomyPanel } from "@/features/taxonomy/TaxonomyPanel";
 import { Timeline } from "@/features/timeline/Timeline";
 import { initializeDatabase } from "@/lib/db";
@@ -28,6 +29,7 @@ import { useCalibrationStore } from "@/stores/calibrationStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useMagnifierStore } from "@/stores/magnifierStore";
+import { usePhaseStore } from "@/stores/phaseStore";
 import { usePositionStore } from "@/stores/positionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSquadStore } from "@/stores/squadStore";
@@ -52,6 +54,7 @@ export function AppShell() {
 
   useTransportKeys(hasVideo);
   useCaptureKeys(hasVideo);
+  usePhaseClock(hasVideo);
   useAnnotationShortcuts();
   useReviewRunner();
 
@@ -100,13 +103,20 @@ export function AppShell() {
   }, [loadMatches, loadTags]);
 
   // Events belong to the open match, so they are reloaded when it changes.
+  // Phases load first: recovering one that was left open by an exit writes the
+  // event's end, and the events must be read after that write rather than before
+  // it, or a phase would look like it is still running for one render.
   useEffect(() => {
     useAnnotationStore.getState().clear();
     if (currentMatchId === null) {
       clearEvents();
+      usePhaseStore.getState().clear();
       return;
     }
-    void loadEvents(currentMatchId);
+    void (async () => {
+      await usePhaseStore.getState().load(currentMatchId);
+      await loadEvents(currentMatchId);
+    })();
   }, [currentMatchId, loadEvents, clearEvents]);
 
   // Calibrations belong to a video. Read the pitch size on demand rather than
@@ -161,7 +171,15 @@ export function AppShell() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <aside className="w-64 shrink-0 overflow-y-auto border-r border-border bg-sidebar p-4">
+        {/*
+          Both sidebars are vertical scrollers, and `overflow-y-auto` alone makes
+          the x axis scrollable too, because CSS computes a `visible` axis as
+          `auto` beside a scrolling one. One row wider than its panel therefore
+          slid the *whole* panel sideways, which is how the Pitch tab came to be
+          cut off on the left. Content is expected to wrap or shrink; this keeps a
+          future too-wide row inside its own panel instead of moving everything.
+        */}
+        <aside className="w-64 shrink-0 overflow-y-auto overflow-x-hidden border-r border-border bg-sidebar p-4">
           <MatchList />
         </aside>
 
@@ -173,7 +191,7 @@ export function AppShell() {
           <TransportBar />
         </main>
 
-        <aside className="w-96 shrink-0 overflow-y-auto border-l border-border bg-card p-4">
+        <aside className="w-96 shrink-0 overflow-y-auto overflow-x-hidden border-l border-border bg-card p-4">
           {/*
             `activationMode="manual"`: the arrow keys move focus along the tab row
             but do not select, because they are also the transport's seek keys.

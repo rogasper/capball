@@ -123,6 +123,10 @@ export function outlinePrimitives(
     fillPattern: "solid" as const,
     patternScale: 0,
     patternAngle: 0,
+    strokePattern: "solid" as const,
+    label: null,
+    // Inert for a stroked outline: no text is drawn with it.
+    fontSize: 0,
     width: style.width,
     center: [0.5, 0.5] as [number, number],
     rotation: 0,

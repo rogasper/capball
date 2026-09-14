@@ -1,3 +1,4 @@
+import { act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   absolutePoints,
@@ -24,6 +25,11 @@ vi.mock("@/lib/db/queries/annotations", () => ({
   updateAnnotationShape: vi.fn(),
   updateAnnotationStyle: vi.fn(),
   updateAnnotationWindow: vi.fn(),
+  // The store loads a drawing's own range in the same read as its row (FR-20.16),
+  // so a mock without this is a load that throws rather than an empty event.
+  listAnnotationWindows: vi.fn().mockResolvedValue(new Map()),
+  setAnnotationWindow: vi.fn(),
+  clearAnnotationWindow: vi.fn(),
   updateAnnotationLabel: vi.fn(),
   deleteAnnotation: vi.fn(),
   countAnnotations: vi.fn(),
@@ -457,5 +463,64 @@ describe("which surface owns the tool, and what the user is told", () => {
     useAnnotationStore.getState().reportNotice("Something to read");
     useAnnotationStore.getState().setTool("line");
     expect(useAnnotationStore.getState().notice).toBeNull();
+  });
+});
+
+describe("a drawing's own range (FR-20.16)", () => {
+  it("applies to the selection, keeps the pair ordered, and writes the row", async () => {
+    const shape = row(1, "u1");
+    useAnnotationStore.setState({
+      eventId: 7,
+      annotations: [shape],
+      selectedId: shape.id,
+      error: null,
+    });
+
+    await act(() => useAnnotationStore.getState().setOwnWindow({ startMs: 40_000, endMs: 30_000 }));
+
+    // A range is a span, not a pair of assertions: "start" and "end" cannot be
+    // inverted, whatever order the two times arrived in.
+    expect(useAnnotationStore.getState().annotations[0]?.ownWindow).toEqual({
+      startMs: 30_000,
+      endMs: 40_000,
+    });
+    expect(annotationsQuery.setAnnotationWindow).toHaveBeenCalledWith(shape.id, 30_000, 40_000);
+  });
+
+  it("removes the row when the range is cleared, returning the shape to its mode", async () => {
+    const shape = row(1, "u1", { ownWindow: { startMs: 30_000, endMs: 40_000 } });
+    useAnnotationStore.setState({
+      eventId: 7,
+      annotations: [shape],
+      selectedId: shape.id,
+      ownWindow: shape.ownWindow,
+      error: null,
+    });
+
+    await act(() => useAnnotationStore.getState().clearOwnWindow());
+
+    expect(useAnnotationStore.getState().annotations[0]?.ownWindow).toBeNull();
+    expect(annotationsQuery.clearAnnotationWindow).toHaveBeenCalledWith(shape.id);
+  });
+
+  it("clears a range when another mode is chosen, so the choice is not ignored", async () => {
+    // The range wins over the mode, so a mode that left it in place would look
+    // like a control that does nothing.
+    const shape = row(1, "u1", { ownWindow: { startMs: 30_000, endMs: 40_000 } });
+    useAnnotationStore.setState({
+      eventId: 7,
+      annotations: [shape],
+      selectedId: shape.id,
+      ownWindow: shape.ownWindow,
+      error: null,
+    });
+
+    await act(async () => {
+      useAnnotationStore.getState().setWindow("event", 2_500);
+      await Promise.resolve();
+    });
+
+    expect(annotationsQuery.clearAnnotationWindow).toHaveBeenCalledWith(shape.id);
+    expect(useAnnotationStore.getState().ownWindow).toBeNull();
   });
 });

@@ -204,3 +204,86 @@ describe("annotations against real SQLite", () => {
     );
   });
 });
+
+describe("a drawing's own range (FR-20.16)", () => {
+  it("is stored beside its drawing, replaced rather than duplicated, and read back", async () => {
+    const annotation = await annotationsQuery.createAnnotation({
+      uid: "window-1",
+      eventId,
+      kind: "rect",
+      windowMode: "moment",
+      windowMs: 2_500,
+      geometry: boxGeometry([0.1, 0.1], [0.3, 0.3]),
+      style: { ...DEFAULT_STYLE },
+      label: null,
+      z: 0,
+    });
+
+    await annotationsQuery.setAnnotationWindow(annotation.id, 30_000, 40_000);
+    // A second range for the same drawing is a correction, not a second fact.
+    await annotationsQuery.setAnnotationWindow(annotation.id, 31_000, 41_000);
+
+    const windows = await annotationsQuery.listAnnotationWindows(eventId);
+    expect(windows.get(annotation.id)).toEqual({ startMs: 31_000, endMs: 41_000 });
+    expect(windows.size).toBe(1);
+  });
+
+  it("goes with its drawing when the drawing is deleted", async () => {
+    const annotation = await annotationsQuery.createAnnotation({
+      uid: "window-2",
+      eventId,
+      kind: "rect",
+      windowMode: "moment",
+      windowMs: 2_500,
+      geometry: boxGeometry([0.1, 0.1], [0.3, 0.3]),
+      style: { ...DEFAULT_STYLE },
+      label: null,
+      z: 0,
+    });
+    await annotationsQuery.setAnnotationWindow(annotation.id, 1_000, 2_000);
+
+    await annotationsQuery.deleteAnnotation(annotation.id);
+
+    expect((await annotationsQuery.listAnnotationWindows(eventId)).size).toBe(0);
+  });
+
+  it("is removed by clearing it, which is how a drawing returns to its mode", async () => {
+    const annotation = await annotationsQuery.createAnnotation({
+      uid: "window-3",
+      eventId,
+      kind: "rect",
+      windowMode: "event",
+      windowMs: 2_500,
+      geometry: boxGeometry([0.1, 0.1], [0.3, 0.3]),
+      style: { ...DEFAULT_STYLE },
+      label: null,
+      z: 0,
+    });
+    await annotationsQuery.setAnnotationWindow(annotation.id, 1_000, 2_000);
+
+    await annotationsQuery.clearAnnotationWindow(annotation.id);
+
+    expect((await annotationsQuery.listAnnotationWindows(eventId)).size).toBe(0);
+    // The drawing itself is untouched, and its mode is what it always was.
+    const rows = await annotationsQuery.listAnnotations(eventId);
+    expect(rows.find((row) => row.uid === "window-3")?.windowMode).toBe("event");
+  });
+
+  it("only reports the windows of the event being read", async () => {
+    const annotation = await annotationsQuery.createAnnotation({
+      uid: "window-4",
+      eventId: otherEventId,
+      kind: "rect",
+      windowMode: "moment",
+      windowMs: 2_500,
+      geometry: boxGeometry([0.1, 0.1], [0.3, 0.3]),
+      style: { ...DEFAULT_STYLE },
+      label: null,
+      z: 0,
+    });
+    await annotationsQuery.setAnnotationWindow(annotation.id, 1_000, 2_000);
+
+    expect((await annotationsQuery.listAnnotationWindows(eventId)).size).toBe(0);
+    expect((await annotationsQuery.listAnnotationWindows(otherEventId)).size).toBe(1);
+  });
+});

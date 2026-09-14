@@ -20,6 +20,7 @@ import {
   DEFAULT_STYLE,
   type Geometry,
   type ShapeKind,
+  type TimeWindow,
   type WindowMode,
 } from "@/lib/annotate/types";
 import { edgeMidpoint, insertVertex, moveVertex, removeVertex } from "@/lib/annotate/vertices";
@@ -54,6 +55,8 @@ type Patch = {
   style?: AnnotationStyle;
   windowMode?: WindowMode;
   windowMs?: number;
+  /** A drawing's own on-screen range (FR-20.16); null returns it to its mode. */
+  ownWindow?: TimeWindow | null;
   label?: string | null;
 };
 
@@ -98,6 +101,8 @@ type AnnotationState = {
   style: AnnotationStyle;
   windowMode: WindowMode;
   windowMs: number;
+  /** The range the next drawing gets, or null to follow its event (FR-20.16). */
+  ownWindow: TimeWindow | null;
 
   undoStack: Command[];
   redoStack: Command[];
@@ -111,6 +116,13 @@ type AnnotationState = {
   setTool: (tool: ShapeKind | null, surface?: AnnotationSurface) => void;
   setStyle: (patch: Partial<AnnotationStyle>) => void;
   setWindow: (mode: WindowMode, ms?: number) => void;
+  /**
+   * Gives the selected drawing a range of its own (FR-20.16), or — with nothing
+   * selected — makes that range the default for the next one.
+   */
+  setOwnWindow: (range: TimeWindow) => Promise<void>;
+  /** Removes the selected drawing's own range, returning it to its window mode. */
+  clearOwnWindow: () => Promise<void>;
 
   beginDraft: (geometry: Geometry) => void;
   updateDraft: (geometry: Geometry) => void;
@@ -188,6 +200,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
     style: { ...DEFAULT_STYLE },
     windowMode: "moment",
     windowMs: INITIAL_WINDOW_MS,
+    ownWindow: null,
     undoStack: [],
     redoStack: [],
     error: null,
@@ -195,10 +208,15 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
 
     async load(eventId) {
       try {
-        const rows = await annotationsQuery.listAnnotations(eventId);
+        const [rows, windows] = await Promise.all([
+          annotationsQuery.listAnnotations(eventId),
+          annotationsQuery.listAnnotationWindows(eventId),
+        ]);
         set({
           eventId,
-          annotations: sortByLayer(rows),
+          annotations: sortByLayer(
+            rows.map((row) => ({ ...row, ownWindow: windows.get(row.id) ?? null })),
+          ),
           selectedId: null,
           draft: null,
           draftPoints: null,
@@ -274,12 +292,65 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
       });
     },
 
+    async setOwnWindow(range) {
+      const startMs = Math.max(0, Math.round(Math.min(range.startMs, range.endMs)));
+      const endMs = Math.max(startMs, Math.round(Math.max(range.startMs, range.endMs)));
+      const ownWindow = { startMs, endMs };
+      const id = get().selectedId;
+      set({ ownWindow });
+
+      if (id === null) return;
+      const before = get().annotations.find((annotation) => annotation.id === id);
+      if (!before) return;
+
+      applyPatch(id, { ownWindow });
+      pushCommand({
+        kind: "patch",
+        id,
+        before: { ownWindow: before.ownWindow ?? null },
+        after: { ownWindow },
+      });
+
+      try {
+        await annotationsQuery.setAnnotationWindow(id, startMs, endMs);
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    },
+
+    async clearOwnWindow() {
+      const id = get().selectedId;
+      set({ ownWindow: null });
+      if (id === null) return;
+
+      const before = get().annotations.find((annotation) => annotation.id === id);
+      if (!before) return;
+
+      applyPatch(id, { ownWindow: null });
+      pushCommand({
+        kind: "patch",
+        id,
+        before: { ownWindow: before.ownWindow ?? null },
+        after: { ownWindow: null },
+      });
+
+      try {
+        await annotationsQuery.clearAnnotationWindow(id);
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    },
+
     setWindow(mode, ms) {
       const windowMs = Math.max(0, Math.round(ms ?? get().windowMs));
       const id = get().selectedId;
-      set({ windowMode: mode, windowMs });
+      const hadOwnWindow = get().annotations.find((row) => row.id === id)?.ownWindow ?? null;
+      set({ windowMode: mode, windowMs, ownWindow: null });
 
       if (id === null) return;
+      // The range wins over the mode, so choosing a mode has to remove it: a
+      // control that appears to do nothing is worse than one that is missing.
+      if (hadOwnWindow !== null) void get().clearOwnWindow();
       const before = get().annotations.find((annotation) => annotation.id === id);
       if (!before) return;
 
@@ -338,6 +409,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
 
       if (!geometry) return;
 
+      const ownWindow = get().ownWindow;
       const draftAnnotation: Annotation = {
         id: -1,
         uid: crypto.randomUUID(),
@@ -345,6 +417,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
         kind: tool,
         windowMode,
         windowMs,
+        ownWindow,
         geometry: placed,
         style: { ...style },
         label: tool === "text" ? (draftLabel ?? "") : (draftLabel ?? null),
@@ -366,21 +439,35 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => {
           z: draftAnnotation.z,
         });
 
+        // The row is the fact, so a drawing with a range gets one in the same
+        // gesture that creates it.
+        const withWindow = ownWindow === null ? stored : { ...stored, ownWindow };
+        if (ownWindow !== null) {
+          await annotationsQuery.setAnnotationWindow(stored.id, ownWindow.startMs, ownWindow.endMs);
+        }
+
         set((state) => ({
-          annotations: sortByLayer([...state.annotations, stored]),
+          annotations: sortByLayer([...state.annotations, withWindow]),
           selectedId: stored.id,
           error: null,
           notice: null,
         }));
-        pushCommand({ kind: "create", annotation: stored });
+        pushCommand({ kind: "create", annotation: withWindow });
       } catch (error) {
         set({ error: messageOf(error) });
       }
     },
 
     select(id) {
-      // A notice refers to the selection it was raised for.
-      set({ selectedId: id, notice: null });
+      // A notice refers to the selection it was raised for. Selecting a drawing
+      // also shows its own range, so the control matches what is on the canvas.
+      const selected = get().annotations.find((annotation) => annotation.id === id);
+      set({
+        selectedId: id,
+        notice: null,
+        ownWindow: selected?.ownWindow ?? null,
+        ...(selected ? { windowMode: selected.windowMode, windowMs: selected.windowMs } : {}),
+      });
     },
 
     beginDrag() {

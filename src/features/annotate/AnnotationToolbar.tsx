@@ -21,10 +21,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { FillPattern, ShapeKind } from "@/lib/annotate/types";
+import { STROKE_PRESETS, type StrokePreset, stylePatchOf } from "@/lib/annotate/presets";
+import {
+  type FillPattern,
+  type ShapeKind,
+  STROKE_PATTERNS,
+  type StrokePattern,
+} from "@/lib/annotate/types";
 import { canEditVertices } from "@/lib/annotate/vertices";
+import { defaultOwnWindow } from "@/lib/annotate/window";
+import { playback } from "@/lib/playback";
+import { STROKE_PATTERN_LABELS, strokePreviewPath } from "@/lib/render/stroke";
+import { formatTimecode } from "@/lib/time/timecode";
 import { cn } from "@/lib/utils";
 import { useAnnotationStore } from "@/stores/annotationStore";
+import { useEventStore } from "@/stores/eventStore";
 import { usePlayerStore } from "@/stores/playerStore";
 
 /**
@@ -45,6 +56,45 @@ const TOOLS: { kind: ShapeKind; label: string; Icon: typeof Square }[] = [
 ];
 
 const STROKE_SWATCHES = ["#4C8DFF", "#FF4C4C", "#FFB020", "#34D399", "#FFFFFF"];
+
+/**
+ * A line sample, at the pattern and width the renderer will use (FR-20.14).
+ *
+ * The toolbar shows the line rather than naming it, because "dashed" is a word
+ * and a dash is the thing the user is choosing between.
+ */
+function StrokeSample({
+  pattern,
+  colour,
+  width = 18,
+  strokeWidth = 2,
+}: {
+  pattern: StrokePattern;
+  colour: string;
+  width?: number;
+  strokeWidth?: number;
+}) {
+  const sample = strokePreviewPath(pattern, strokeWidth);
+  return (
+    <svg
+      width={width}
+      height={12}
+      viewBox="0 0 24 12"
+      aria-hidden="true"
+      className="shrink-0"
+      focusable="false"
+    >
+      <path
+        d={sample.d}
+        fill="none"
+        stroke={colour}
+        strokeWidth={sample.strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={sample.dash ?? undefined}
+      />
+    </svg>
+  );
+}
 
 /**
  * Fills carry an alpha so a zone marks an area without hiding the players in
@@ -84,7 +134,14 @@ export function AnnotationToolbar() {
   const setStyle = useAnnotationStore((state) => state.setStyle);
   const windowMode = useAnnotationStore((state) => state.windowMode);
   const windowMs = useAnnotationStore((state) => state.windowMs);
+  const ownWindow = useAnnotationStore((state) => state.ownWindow);
   const setWindow = useAnnotationStore((state) => state.setWindow);
+  const setOwnWindow = useAnnotationStore((state) => state.setOwnWindow);
+  const durationMs = usePlayerStore((state) => state.durationMs);
+  // The event's own span, which is the scale the range's bar is drawn against.
+  const event = useEventStore((state) =>
+    eventId === null ? null : (state.events.find((candidate) => candidate.id === eventId) ?? null),
+  );
   const remove = useAnnotationStore((state) => state.remove);
   const setLabel = useAnnotationStore((state) => state.setLabel);
   const undo = useAnnotationStore((state) => state.undo);
@@ -162,6 +219,64 @@ export function AnnotationToolbar() {
             : "Click each corner of the zone, then press Enter or double-click to close it."}
         </p>
       )}
+
+      {/* The notation (FR-20.14). A preset sets the line style, colour, weight
+          and head in one press: with a shape selected it restyles that shape,
+          with nothing selected it arms the tool, and the tooltip says which. */}
+      <div className="space-y-1.5">
+        <Label className="text-label text-muted-foreground">Notation</Label>
+        <div className="flex flex-wrap items-center gap-1">
+          {STROKE_PRESETS.map((preset: StrokePreset) => {
+            const active = style.stroke === preset.colour && style.strokePattern === preset.pattern;
+            return (
+              <Button
+                key={preset.key}
+                variant={active ? "default" : "outline"}
+                size="xs"
+                className="gap-1"
+                aria-pressed={active}
+                title={
+                  selected === null
+                    ? `Draw a ${preset.label.toLowerCase()} — ${preset.meaning}`
+                    : `Restyle the selected shape — ${preset.meaning}`
+                }
+                onClick={() => {
+                  // Restyle first: `setStyle` is what reaches a selection, and
+                  // arming the tool is the part that only matters when drawing.
+                  setStyle(stylePatchOf(preset));
+                  if (selected === null) setTool(preset.tool);
+                }}
+              >
+                <StrokeSample pattern={preset.pattern} colour={preset.colour} />
+                {preset.label}
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* The line style on its own, for a stroke that is not one of the five. */}
+      <div className="space-y-1.5">
+        <Label className="text-label text-muted-foreground">Line style</Label>
+        <div className="flex flex-wrap items-center gap-1">
+          {STROKE_PATTERNS.map((pattern: StrokePattern) => (
+            <button
+              key={pattern}
+              type="button"
+              aria-label={`${STROKE_PATTERN_LABELS[pattern]} line`}
+              aria-pressed={style.strokePattern === pattern}
+              title={STROKE_PATTERN_LABELS[pattern]}
+              className={cn(
+                "rounded-md border p-1",
+                style.strokePattern === pattern ? "border-foreground" : "border-border",
+              )}
+              onClick={() => setStyle({ strokePattern: pattern })}
+            >
+              <StrokeSample pattern={pattern} colour={style.stroke} width={24} />
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="space-y-1.5">
         <Label className="text-label text-muted-foreground">Colour</Label>
@@ -283,20 +398,29 @@ export function AnnotationToolbar() {
         <Label className="text-label text-muted-foreground">On screen for</Label>
         <div className="flex items-center gap-2">
           <Select
-            value={windowMode}
-            onValueChange={(value) => setWindow(value as typeof windowMode, windowMs)}
+            // A range wins over the mode, so the control shows the state that is
+            // actually in effect rather than the one that was set and overridden.
+            value={ownWindow === null ? windowMode : "range"}
+            onValueChange={(value) => {
+              if (value === "range") {
+                void setOwnWindow(defaultOwnWindow(playback.timeMs, durationMs));
+                return;
+              }
+              setWindow(value as typeof windowMode, windowMs);
+            }}
           >
             <SelectTrigger size="sm" className="h-7 flex-1 text-label" aria-label="Time window">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="range">A range I set</SelectItem>
               <SelectItem value="moment">Its own moment</SelectItem>
               <SelectItem value="event">The event's clips</SelectItem>
               <SelectItem value="clip">The whole clip</SelectItem>
             </SelectContent>
           </Select>
 
-          {windowMode === "moment" && (
+          {ownWindow === null && windowMode === "moment" && (
             <Input
               type="number"
               min={200}
@@ -308,6 +432,67 @@ export function AnnotationToolbar() {
             />
           )}
         </div>
+
+        {/* A drawing's own range (FR-20.16). The bar is the event's own span with
+            the range inside it, so a range that falls outside the event is visible
+            as such rather than quietly doing nothing. The three actions read the
+            playhead, which is how this app sets every other time. */}
+        {ownWindow !== null && (
+          <div className="space-y-1.5">
+            <div
+              className="relative h-4 overflow-hidden rounded-sm border border-border bg-muted/40"
+              role="img"
+              aria-label={`On screen from ${formatTimecode(ownWindow.startMs)} to ${formatTimecode(ownWindow.endMs)}`}
+            >
+              {event && event.endMs > event.startMs && (
+                <span
+                  className="absolute inset-y-0 rounded-sm bg-primary/50"
+                  style={{
+                    left: `${((ownWindow.startMs - event.startMs) / (event.endMs - event.startMs)) * 100}%`,
+                    width: `${((ownWindow.endMs - ownWindow.startMs) / (event.endMs - event.startMs)) * 100}%`,
+                  }}
+                />
+              )}
+              {event && (
+                <span className="absolute inset-0 flex items-center justify-center font-mono text-caption tabular-nums text-foreground/80">
+                  {formatTimecode(ownWindow.startMs)} → {formatTimecode(ownWindow.endMs)}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              <Button
+                variant="outline"
+                size="xs"
+                title="Set the start of the range to the playhead"
+                onClick={() =>
+                  void setOwnWindow({ startMs: playback.timeMs, endMs: ownWindow.endMs })
+                }
+              >
+                Start here
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                title="Set the end of the range to the playhead"
+                onClick={() =>
+                  void setOwnWindow({ startMs: ownWindow.startMs, endMs: playback.timeMs })
+                }
+              >
+                End here
+              </Button>
+              {event && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  title="Widen the range to the event's own clip"
+                  onClick={() => void setOwnWindow({ startMs: event.startMs, endMs: event.endMs })}
+                >
+                  The whole event
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {selected && (

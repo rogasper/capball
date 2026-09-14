@@ -1,4 +1,4 @@
-import { listAnnotations } from "@/lib/db/queries/annotations";
+import { listAnnotations, listAnnotationWindows } from "@/lib/db/queries/annotations";
 import { listCalibrations } from "@/lib/db/queries/calibrations";
 import type { EventRow } from "@/lib/db/queries/events";
 import { listEvents } from "@/lib/db/queries/events";
@@ -145,7 +145,10 @@ async function collectAnnotations(
   const keys = eventKeys(videos, events);
   const groups = await Promise.all(
     events.map(async (event) => {
-      const rows = await listAnnotations(event.id);
+      const [rows, windows] = await Promise.all([
+        listAnnotations(event.id),
+        listAnnotationWindows(event.id),
+      ]);
       const eventKey = keys.get(event.id) ?? "";
       return rows.map((row) => ({
         uid: row.uid,
@@ -153,6 +156,9 @@ async function collectAnnotations(
         kind: row.kind,
         windowMode: row.windowMode,
         windowMs: row.windowMs,
+        // Carried so a drawing's own time survives a transfer; absent in a file
+        // written before FR-20.16, which reads back as no range.
+        ownWindow: windows.get(row.id) ?? null,
         geometry: row.geometry,
         style: row.style,
         label: row.label,

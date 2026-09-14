@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { EventRow } from "@/lib/db/queries/events";
 import * as eventsQuery from "@/lib/db/queries/events";
 import { useAnnotationStore } from "@/stores/annotationStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 
 /**
  * A ready-to-store event.
@@ -39,9 +40,17 @@ type EventState = {
 
   load: (matchId: number) => Promise<void>;
   clear: () => void;
-  insert: (draft: EventDraft) => Promise<void>;
+  /** Stores one event and returns its id, so a phase can open a session on it. */
+  insert: (draft: EventDraft) => Promise<number | null>;
   undoLast: () => Promise<void>;
   adjustEnd: (eventId: number, deltaMs: number) => Promise<void>;
+  /** Moves or trims an event's clip range, and the moment with it (FR-6.3). */
+  setEventRange: (
+    eventId: number,
+    range: { startMs: number; endMs: number; anchorMs?: number },
+  ) => Promise<void>;
+  /** Splits an event at a moment into two, the first keeping its drawings (FR-6.3). */
+  splitEvent: (eventId: number, atMs: number) => Promise<void>;
   updateNotes: (eventId: number, notes: string) => Promise<void>;
   remove: (eventId: number) => Promise<void>;
   setFilters: (patch: Partial<EventFilters>) => void;
@@ -77,6 +86,11 @@ export function insertInOrder(events: EventRow[], row: EventRow): EventRow[] {
   if (at === -1) next.push(row);
   else next.splice(at, 0, row);
   return next;
+}
+
+/** Re-orders a list after a range edit moved a row in time. */
+function sortInOrder(events: EventRow[]): EventRow[] {
+  return [...events].sort((a, b) => a.startMs - b.startMs || a.id - b.id);
 }
 
 /** The events a filter lets through; an empty tag list means every tag. */
@@ -143,8 +157,10 @@ export const useEventStore = create<EventState>((set, get) => ({
         undoStack: [...state.undoStack, id].slice(-MAX_UNDO),
         error: null,
       }));
+      return id;
     } catch (error) {
       set({ error: messageOf(error) });
+      return null;
     }
   },
 
@@ -178,22 +194,113 @@ export const useEventStore = create<EventState>((set, get) => ({
   async adjustEnd(eventId, deltaMs) {
     const row = get().events.find((candidate) => candidate.id === eventId);
     if (!row) return;
+    await get().setEventRange(eventId, {
+      startMs: row.startMs,
+      endMs: Math.max(row.startMs, row.endMs + deltaMs),
+    });
+  },
 
-    const endMs = Math.max(row.startMs, row.endMs + deltaMs);
+  /**
+   * Moves or trims a span (FR-6.3).
+   *
+   * Applied locally first, so a drag follows the pointer rather than the
+   * database, and put back if the write fails. The anchor travels with the range
+   * when it is given — dragging a span carries its moment — and is clamped
+   * inside the range, because a moment outside its own clip is a state nothing
+   * else should have to handle.
+   */
+  async setEventRange(eventId, range) {
+    const row = get().events.find((candidate) => candidate.id === eventId);
+    if (!row) return;
 
+    const startMs = Math.max(0, Math.round(range.startMs));
+    const endMs = Math.max(startMs, Math.round(range.endMs));
+    const anchorMs =
+      range.anchorMs === undefined
+        ? row.anchorMs
+        : Math.min(endMs, Math.max(startMs, Math.round(range.anchorMs)));
+
+    const patched = { startMs, endMs, anchorMs };
     set((state) => ({
-      events: state.events.map((candidate) =>
-        candidate.id === eventId ? { ...candidate, endMs } : candidate,
+      events: sortInOrder(
+        state.events.map((candidate) =>
+          candidate.id === eventId ? { ...candidate, ...patched } : candidate,
+        ),
       ),
+      error: null,
     }));
 
     try {
-      await eventsQuery.updateEventRange(eventId, row.startMs, endMs);
+      await eventsQuery.updateEventRange(eventId, startMs, endMs, anchorMs);
     } catch (error) {
       set((state) => ({
         error: messageOf(error),
-        events: state.events.map((candidate) => (candidate.id === eventId ? row : candidate)),
+        events: sortInOrder(
+          state.events.map((candidate) => (candidate.id === eventId ? row : candidate)),
+        ),
       }));
+    }
+  },
+
+  /**
+   * Splits an event at a moment into two (FR-6.3).
+   *
+   * The **first** half keeps everything the event owned — its drawings, its
+   * positions, its notes — because they were made about the moment it still has.
+   * The second half is a new event with the same tag, team and player, anchored
+   * at the split, so nothing has to be re-tagged to carry on.
+   *
+   * Two writes, and no transaction spans the IPC boundary, so the insert goes
+   * first and is removed again if the trim fails — better a visible error than
+   * two overlapping events nobody asked for.
+   */
+  async splitEvent(eventId, atMs) {
+    const row = get().events.find((candidate) => candidate.id === eventId);
+    if (!row) return;
+
+    const at = Math.round(atMs);
+    if (at <= row.startMs || at >= row.endMs) {
+      set({ error: "Split the event somewhere inside its own clip range." });
+      return;
+    }
+
+    const matchId = useLibraryStore.getState().currentMatch?.id;
+    if (matchId === undefined) {
+      set({ error: "Open a match before splitting an event." });
+      return;
+    }
+
+    await get().insert({
+      matchId,
+      videoId: row.videoId,
+      tagId: row.tagId,
+      tagName: row.tagName,
+      tagColor: row.tagColor,
+      categoryName: row.categoryName,
+      teamId: row.teamId,
+      teamName: row.teamName,
+      playerId: row.playerId,
+      playerName: row.playerName,
+      anchorMs: at,
+      startMs: at,
+      endMs: row.endMs,
+    });
+
+    const created = get().events.find(
+      (candidate) =>
+        candidate.anchorMs === at && candidate.startMs === at && candidate.id !== row.id,
+    );
+
+    await get().setEventRange(row.id, {
+      startMs: row.startMs,
+      endMs: at,
+      // The first half keeps its own moment when it still has one.
+      anchorMs: row.anchorMs <= at ? row.anchorMs : at,
+    });
+
+    if (get().error !== null && created) {
+      await get().remove(created.id);
+      set({ error: "The event could not be split; nothing was changed." });
     }
   },
 

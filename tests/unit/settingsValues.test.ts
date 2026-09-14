@@ -52,6 +52,9 @@ describe("decodeSettings", () => {
         fillPattern: "solid",
         patternScale: 0.02,
         patternAngle: -Math.PI / 4,
+        // The same guarantee for the line style added in FR-20.14: absent means
+        // solid, so an old drawing is not restyled by the release that adds it.
+        strokePattern: "solid",
       },
     });
   });

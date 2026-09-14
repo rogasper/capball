@@ -1,4 +1,4 @@
-import type { AnnotationStyle, Geometry } from "@/lib/annotate/types";
+import type { AnnotationStyle, Geometry, TimeWindow } from "@/lib/annotate/types";
 import type { EventRow } from "@/lib/db/queries/events";
 import type { Video } from "@/lib/db/queries/videos";
 
@@ -82,6 +82,13 @@ export type AnalysisAnnotation = {
   kind: string;
   windowMode: string;
   windowMs: number;
+  /**
+   * A drawing's own on-screen range (FR-20.16), or null when it follows its
+   * event. **Additive**: a file written before this release has no such field and
+   * imports with no range, and a reader that does not know it ignores it — which
+   * is why it rides in the existing version rather than forcing a bump alone.
+   */
+  ownWindow?: TimeWindow | null;
   geometry: Geometry;
   style: AnnotationStyle;
   label: string | null;

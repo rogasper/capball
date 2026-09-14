@@ -35,6 +35,10 @@ function recorder(): { ctx: Canvas2D; ops: Op[] } {
     quadraticCurveTo: (cx, cy, x, y) => ops.push(["quadraticCurveTo", cx, cy, x, y]),
     closePath: () => ops.push(["closePath"]),
     clip: () => ops.push(["clip"]),
+    setLineDash: (segments) => ops.push(["setLineDash", [...segments]]),
+    // Deterministic and font-free: the renderer only needs a width, and a test
+    // must not depend on the machine's installed fonts.
+    measureText: (text) => ({ width: text.length * 0.5 * 16 }),
     fill: () => ops.push(["fill", ctx.fillStyle]),
     stroke: () => ops.push(["stroke", ctx.strokeStyle]),
     fillRect: (x, y, w, h) => ops.push(["fillRect", x, y, w, h]),
@@ -296,5 +300,66 @@ describe("patterned fills (FR-20.12)", () => {
       }),
     );
     expect(opsNamed(ops, "clip")).toHaveLength(0);
+  });
+});
+
+describe("line styles and labels (FR-20.14, FR-20.15)", () => {
+  it("strokes a dashed line with the dash, then clears it", () => {
+    // 0.01 of a 200 px frame is a 2 px line, so the dash is 8 on, 6 off — measured
+    // in widths, which is why the export's 4 px line gets 16 and 12.
+    const ops = draw(
+      annotation("rect", { style: { ...DEFAULT_STYLE, strokePattern: "dashed", width: 0.01 } }),
+      200,
+      100,
+    );
+
+    expect(ops).toContainEqual(["setLineDash", [8, 6]]);
+    expect(ops).toContainEqual(["setLineDash", []]);
+  });
+
+  it("leaves a solid line with an empty dash rather than no dash at all", () => {
+    // `setLineDash([])` is what resets the canvas: a shape must never inherit the
+    // previous shape's pattern, which is why solid is an explicit empty array.
+    const ops = draw(annotation("rect"), 200, 100);
+    expect(opsNamed(ops, "setLineDash")).toEqual([
+      ["setLineDash", []],
+      ["setLineDash", []],
+    ]);
+  });
+
+  it("draws a label as a chip with its own background", () => {
+    const ops = draw(annotation("rect", { label: "Zone 14" }));
+
+    // A background first, then the words: a label over moving footage cannot rely
+    // on the picture behind it.
+    const chip = ops.findIndex(([op]) => op === "fillRect");
+    const text = ops.findIndex(([op, value]) => op === "fillText" && value === "Zone 14");
+    expect(chip).toBeGreaterThan(-1);
+    expect(text).toBeGreaterThan(chip);
+  });
+
+  it("puts the chip outside the shape it describes", () => {
+    const ops = draw(annotation("rect", { label: "Zone 14" }), 1000, 1000);
+    const [, x, y] = opsNamed(ops, "fillRect")[0];
+    // The rectangle starts at y = 100, so its label sits above that line.
+    expect(Number(y)).toBeLessThan(100);
+    expect(Number(x)).toBeGreaterThanOrEqual(100);
+  });
+
+  it("draws no chip when there is no label", () => {
+    expect(opsNamed(draw(annotation("rect", { label: null })), "fillText")).toHaveLength(0);
+  });
+
+  it("truncates a very long label rather than letting it run across the frame", () => {
+    const ops = draw(annotation("rect", { label: "A".repeat(80) }));
+    const drawn = opsNamed(ops, "fillText")[0];
+    expect(drawn?.[1]).toHaveLength(40);
+    expect(String(drawn?.[1]).endsWith("…")).toBe(true);
+  });
+
+  it("does not give a text shape a second copy of its own words", () => {
+    const drawn = opsNamed(draw(annotation("text", { label: "Build up" })), "fillText");
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]?.[1]).toBe("Build up");
   });
 });

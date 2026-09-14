@@ -1,8 +1,10 @@
 import type { Point } from "@/lib/annotate/geometry";
 import {
   absolutePoints,
+  distanceToSegment,
   hitTest,
   pathGeometry,
+  pointInPolygon,
   type Rect,
   rotatePoint,
 } from "@/lib/annotate/geometry";
@@ -190,6 +192,12 @@ export function projectShape(
       kind: "path",
       z: annotation.z,
       annotationId: annotation.id,
+      // The line style and the label travel with the projection, so a dashed run
+      // drawn on the pitch view is still dashed over the frame (FR-20.14), and a
+      // label is not lost by changing surface (FR-20.15).
+      strokePattern: annotation.style.strokePattern,
+      label: annotation.label,
+      fontSize: annotation.style.fontSize,
       // The projection has already applied the rotation, so the renderer must
       // not apply it a second time.
       rotation: 0,
@@ -307,7 +315,50 @@ const stylesForHitTest: Annotation["style"] = {
   fillPattern: "solid",
   patternScale: 0,
   patternAngle: 0,
+  strokePattern: "solid",
 };
+
+/**
+ * Which shape a **pitch point** is inside, topmost first, in metres.
+ *
+ * The angled view needs this and cannot use the pixel hit test: a metre maps to a
+ * screen pixel through a perspective divide, not through a linear rect. On the
+ * ground plane, though, the question is simpler and exact — is this metre inside
+ * that shape — and it needs no pixels at all. The tolerance is in metres, because
+ * that is what a caller can reason about: the view tells it how many metres a
+ * pixel is worth at that spot (`metresPerPixel` in `pitch3d`).
+ */
+export function pitchShapeAtPoint(
+  annotations: Annotation[],
+  point: Point,
+  toleranceM: number,
+): number | null {
+  const ordered = [...annotations].sort((a, b) => b.z - a.z || b.id - a.id);
+
+  for (const annotation of ordered) {
+    const outline = shapeOutline(annotation.geometry, annotation.kind);
+    if (!outline || outline.points.length < 2) continue;
+
+    if (outline.closed && outline.points.length >= 3) {
+      // A closed shape is a region: clicking inside it selects it, with or without
+      // a fill, which is also how the top-down view behaves.
+      if (pointInPolygon(point, outline.points)) return annotation.id;
+    }
+
+    for (let i = 0; i < outline.points.length - 1; i++) {
+      if (distanceToSegment(point, outline.points[i], outline.points[i + 1]) <= toleranceM) {
+        return annotation.id;
+      }
+    }
+    if (outline.closed && outline.points.length >= 2) {
+      const first = outline.points[0];
+      const last = outline.points[outline.points.length - 1];
+      if (distanceToSegment(point, last, first) <= toleranceM) return annotation.id;
+    }
+  }
+
+  return null;
+}
 
 /**
  * Whether a geometry's numbers could belong to the space it claims.

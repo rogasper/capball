@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type Annotation, DEFAULT_STYLE, type WindowMode } from "@/lib/annotate/types";
+import { type Annotation, DEFAULT_STYLE, ownWindowOf, type WindowMode } from "@/lib/annotate/types";
 import {
+  defaultOwnWindow,
   isVisibleAt,
   mergeWindows,
   resolveWindow,
@@ -114,5 +115,64 @@ describe("mergeWindows", () => {
         { startMs: 2_000, endMs: 3_000 },
       ]),
     ).toEqual([{ startMs: 0, endMs: 10_000 }]);
+  });
+});
+
+describe("a drawing's own range (FR-20.16)", () => {
+  const base = () => annotation("moment");
+
+  it("wins over the window mode, which is what puts a drawing where it was drawn", () => {
+    // The defect: inside a long passage the event's anchor is where the passage
+    // *began*, so a shape drawn ten minutes in resolved to its start. A range of
+    // its own is the answer, and it has to come first.
+    const shape = { ...base(), ownWindow: { startMs: 620_000, endMs: 630_000 } };
+    const passage: WindowContext = {
+      ...ctx,
+      anchorMs: 600_000,
+      eventStartMs: 600_000,
+      eventEndMs: 900_000,
+    };
+
+    expect(resolveWindow(shape, passage)).toEqual({ startMs: 620_000, endMs: 630_000 });
+    expect(isVisibleAt(shape, 625_000, passage)).toBe(true);
+    expect(isVisibleAt(shape, 601_000, passage)).toBe(false);
+  });
+
+  it("is clamped to the video like every other window", () => {
+    const shape = { ...base(), ownWindow: { startMs: 5_399_000, endMs: 5_500_000 } };
+    expect(resolveWindow(shape, ctx)).toEqual({ startMs: 5_399_000, endMs: 5_400_000 });
+  });
+
+  it("returns to the mode it had when the range is removed", () => {
+    expect(resolveWindow(base(), ctx)).toEqual({ startMs: 58_750, endMs: 61_250 });
+  });
+
+  it("reads a missing or unreadable range as no range at all", () => {
+    // An old row has no such field, and an imported file may carry nonsense: both
+    // must behave like the release before this one rather than throwing.
+    expect(ownWindowOf(base())).toBeNull();
+    expect(ownWindowOf({ ...base(), ownWindow: null })).toBeNull();
+    expect(ownWindowOf({ ...base(), ownWindow: { startMs: Number.NaN, endMs: 10 } })).toBeNull();
+    expect(ownWindowOf({ ...base(), ownWindow: { startMs: 20, endMs: 10 } })).toEqual({
+      startMs: 10,
+      endMs: 20,
+    });
+  });
+});
+
+describe("the range a drawing starts with", () => {
+  it("begins at the playhead, which is the moment being looked at", () => {
+    expect(defaultOwnWindow(60_000, 5_400_000)).toEqual({ startMs: 60_000, endMs: 65_000 });
+  });
+
+  it("slides back near the end of the video rather than being clamped to nothing", () => {
+    expect(defaultOwnWindow(5_399_000, 5_400_000)).toEqual({
+      startMs: 5_395_000,
+      endMs: 5_400_000,
+    });
+  });
+
+  it("stays inside the video when the duration is not known yet", () => {
+    expect(defaultOwnWindow(1_000, 0)).toEqual({ startMs: 1_000, endMs: 6_000 });
   });
 });

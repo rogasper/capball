@@ -1,6 +1,9 @@
 import type { Point } from "@/lib/annotate/geometry";
 import type { Primitive } from "@/lib/annotate/primitives";
+import type { StrokePattern } from "@/lib/annotate/types";
+import { readableTextOn } from "./contrast";
 import { type Bounds, patternSegments } from "./pattern";
+import { strokeDash } from "./stroke";
 
 /**
  * The only code that turns primitives into pixels (D18).
@@ -25,6 +28,10 @@ export type Canvas2D = {
   fill(): void;
   stroke(): void;
   clip(): void;
+  /** The line's pattern (FR-20.14); an empty array is a solid line. */
+  setLineDash(segments: number[]): void;
+  /** Needed to size a label's background rather than guessing its width. */
+  measureText(text: string): { width: number };
   fillRect(x: number, y: number, w: number, h: number): void;
   strokeRect(x: number, y: number, w: number, h: number): void;
   ellipse(
@@ -74,6 +81,95 @@ function drawArrowHead(
   ctx.closePath();
   ctx.fillStyle = colour;
   ctx.fill();
+}
+
+/**
+ * Strokes a path in the primitive's own line style (FR-20.14).
+ *
+ * One place sets and clears the dash, so no later stroke can inherit it: the
+ * dash is a property of this shape, not of the canvas. The array comes from
+ * `strokeDash`, which measures in stroke widths, so the preview and the export
+ * agree at their own resolutions.
+ */
+function strokeWithDash(
+  ctx: Canvas2D,
+  pattern: StrokePattern,
+  lineWidth: number,
+  colour: string,
+): void {
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash(strokeDash(pattern, lineWidth));
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/**
+ * Where a label's chip is anchored.
+ *
+ * A closed shape is labelled at the top-left of its bounds — outside the shape,
+ * where it covers nothing. A stroke is labelled at the **middle of its top
+ * edge**, because a line's bounds are as wide as the line and its corner is at
+ * one end, which would put the words over the wrong part of the movement.
+ */
+function labelAnchor(primitive: Primitive, bounds: Bounds | null): [number, number] {
+  if (!bounds) return [0, 0];
+  const open = primitive.kind === "path" && !primitive.closed;
+  return open ? [bounds.x + bounds.w / 2, bounds.y] : [bounds.x, bounds.y];
+}
+
+/** The longest label drawn on the frame; the panel always has the full text. */
+const MAX_LABEL_CHARS = 40;
+
+/**
+ * Draws a shape's label as a chip above it (FR-20.15).
+ *
+ * The defect this fixes: `label` has been stored since R1 while only a **text**
+ * shape ever drew its words, so a zone could be named and show nothing. The chip
+ * carries its own background, because a label over moving footage cannot rely on
+ * the picture behind it, and its text colour is derived from that background so
+ * a light shape cannot get white text (NFR-34).
+ *
+ * It sits outside the shape's own bounds rather than on top of them, and is
+ * clamped into the picture: a label at the edge is moved, not cut off.
+ */
+function paintLabel(
+  ctx: Canvas2D,
+  text: string | null,
+  bounds: Bounds | null,
+  anchor: Point,
+  fontSize: number,
+  height: number,
+  width: number,
+  colour: string,
+): void {
+  const label = text?.trim();
+  if (!label || !bounds) return;
+
+  const size = Math.max(1, fontSize * height);
+  const shown = label.length > MAX_LABEL_CHARS ? `${label.slice(0, MAX_LABEL_CHARS - 1)}…` : label;
+  const pad = Math.max(2, size * 0.35);
+  const textWidth = ctx.measureText(shown).width;
+  const chipW = textWidth + pad * 2;
+  const chipH = size + pad * 2;
+
+  // Above the shape, with its bottom-left at the anchor. A stroke that is wider
+  // than it is tall (a line, an arrow) is labelled at its middle instead, where
+  // there is room for the chip to be read.
+  let x = anchor[0];
+  let y = anchor[1] - chipH - pad * 0.5;
+  if (y < 0) y = bounds.y + bounds.h + pad * 0.5;
+
+  ctx.font = `${size}px Inter, system-ui, sans-serif`;
+  ctx.textBaseline = "top";
+  x = Math.min(Math.max(0, x), Math.max(0, width - chipW));
+  y = Math.min(Math.max(0, y), Math.max(0, height - chipH));
+
+  const background = colour;
+  ctx.fillStyle = background;
+  ctx.fillRect(x, y, chipW, chipH);
+  ctx.fillStyle = readableTextOn(background);
+  ctx.fillText(shown, x + pad, y + pad);
 }
 
 /** The shape's own bounds in pixels, which is what a hatch has to cover. */
@@ -193,9 +289,11 @@ export function renderPrimitives(
           });
         }
         if (primitive.stroke) {
+          ctx.setLineDash(strokeDash(primitive.strokePattern, lineWidth));
           ctx.strokeStyle = primitive.stroke;
           ctx.lineWidth = lineWidth;
           ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([]);
         }
         break;
       }
@@ -220,9 +318,7 @@ export function renderPrimitives(
         if (primitive.stroke) {
           ctx.beginPath();
           ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-          ctx.strokeStyle = primitive.stroke;
-          ctx.lineWidth = lineWidth;
-          ctx.stroke();
+          strokeWithDash(ctx, primitive.strokePattern, lineWidth, primitive.stroke);
         }
         break;
       }
@@ -269,11 +365,9 @@ export function renderPrimitives(
           ctx.fill();
         }
         if (primitive.stroke) {
-          ctx.strokeStyle = primitive.stroke;
-          ctx.lineWidth = lineWidth;
           ctx.lineCap = "round";
           ctx.lineJoin = "round";
-          ctx.stroke();
+          strokeWithDash(ctx, primitive.strokePattern, lineWidth, primitive.stroke);
         }
         if (primitive.head) {
           drawArrowHead(
@@ -286,6 +380,22 @@ export function renderPrimitives(
         }
         break;
       }
+    }
+
+    // The label last, so it reads over its own shape rather than under it
+    // (FR-20.15). A text shape is skipped: it has already drawn its words.
+    if (primitive.kind !== "text") {
+      const bounds = pixelBounds(primitive, width, height);
+      paintLabel(
+        ctx,
+        primitive.label,
+        bounds,
+        labelAnchor(primitive, bounds),
+        primitive.fontSize,
+        height,
+        width,
+        primitive.stroke ?? "#FFFFFF",
+      );
     }
 
     ctx.restore();

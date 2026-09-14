@@ -13,6 +13,14 @@ export type PlaybackState = {
   paused: boolean;
   durationMs: number;
   rate: number;
+  /**
+   * True once the video reached its end.
+   *
+   * Published as state rather than derived from the playhead, because "the
+   * footage ran out" is a different fact from "the playhead is near the end" —
+   * an open phase closes on the first and must not close on a seek (FR-55.4).
+   */
+  ended: boolean;
   error: string | null;
 };
 
@@ -21,6 +29,7 @@ const INITIAL_STATE: PlaybackState = {
   paused: true,
   durationMs: 0,
   rate: 1,
+  ended: false,
   error: null,
 };
 
@@ -40,6 +49,7 @@ export class PlaybackController {
     video.addEventListener("pause", this.handleTransport);
     video.addEventListener("ratechange", this.handleTransport);
     video.addEventListener("seeked", this.handleSeeked);
+    video.addEventListener("ended", this.handleEnded);
     video.addEventListener("error", this.handleError);
   }
 
@@ -52,6 +62,7 @@ export class PlaybackController {
     video.removeEventListener("pause", this.handleTransport);
     video.removeEventListener("ratechange", this.handleTransport);
     video.removeEventListener("seeked", this.handleSeeked);
+    video.removeEventListener("ended", this.handleEnded);
     video.removeEventListener("error", this.handleError);
     this.video = null;
     this.stopFrames();
@@ -147,12 +158,24 @@ export class PlaybackController {
 
   private handleTransport = (): void => {
     const paused = this.video?.paused ?? true;
-    this.publish({ paused, rate: this.video?.playbackRate ?? 1 });
+    this.publish({
+      paused,
+      rate: this.video?.playbackRate ?? 1,
+      // Playing or seeking clears it; `ended` reads the element, so a pause at
+      // the very end does not report "still playing".
+      ended: this.video?.ended ?? false,
+    });
     if (paused) this.stopFrames();
     else this.startFrames();
   };
 
+  private handleEnded = (): void => {
+    this.publish({ paused: true, ended: true });
+    this.stopFrames();
+  };
+
   private handleSeeked = (): void => {
+    this.publish({ ended: this.video?.ended ?? false });
     this.emitFrame();
   };
 

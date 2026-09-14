@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { DEFAULT_STYLE, isGeometry, isShapeKind, isWindowMode } from "@/lib/annotate/types";
 import { db } from "@/lib/db/client";
+import { setAnnotationWindow } from "@/lib/db/queries/annotations";
 import {
   annotations,
   calibrationPoints,
@@ -377,17 +378,34 @@ async function importAnnotations(
       continue;
     }
 
-    await db.insert(annotations).values({
-      uid: annotation.uid,
-      eventId,
-      kind: annotation.kind,
-      windowMode: annotation.windowMode,
-      windowMs: Math.round(annotation.windowMs),
-      geometryJson: JSON.stringify(annotation.geometry),
-      styleJson: JSON.stringify({ ...DEFAULT_STYLE, ...annotation.style }),
-      label: annotation.label,
-      z: annotation.z,
-    });
+    const [created] = await db
+      .insert(annotations)
+      .values({
+        uid: annotation.uid,
+        eventId,
+        kind: annotation.kind,
+        windowMode: annotation.windowMode,
+        windowMs: Math.round(annotation.windowMs),
+        geometryJson: JSON.stringify(annotation.geometry),
+        styleJson: JSON.stringify({ ...DEFAULT_STYLE, ...annotation.style }),
+        label: annotation.label,
+        z: annotation.z,
+      })
+      .returning({ id: annotations.id });
+
+    // A drawing's own range travels with it (FR-20.16). Read defensively: an
+    // older file has no such field, and a malformed one must not fail the import
+    // of the drawing it belongs to.
+    const own = annotation.ownWindow;
+    if (
+      created?.id !== undefined &&
+      own &&
+      Number.isFinite(own.startMs) &&
+      Number.isFinite(own.endMs)
+    ) {
+      await setAnnotationWindow(created.id, own.startMs, own.endMs);
+    }
+
     summary.annotationsCreated += 1;
   }
 }

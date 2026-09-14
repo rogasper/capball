@@ -6,9 +6,10 @@ import {
   isShapeKind,
   isWindowMode,
   normaliseStyle,
+  type TimeWindow,
 } from "@/lib/annotate/types";
 import { db } from "@/lib/db/client";
-import { annotations } from "@/lib/db/schema";
+import { annotations, annotationWindows } from "@/lib/db/schema";
 
 /**
  * Annotations are stored as rows with two JSON columns.
@@ -79,6 +80,56 @@ export async function listAnnotations(eventId: number): Promise<Annotation[]> {
     .orderBy(asc(annotations.z), asc(annotations.id));
 
   return rows.map(toAnnotation);
+}
+
+/**
+ * The drawings' own on-screen ranges, keyed by annotation id (FR-20.16).
+ *
+ * A second read rather than a joined select: `listAnnotations` is the single-table
+ * select the canvas and the export both already call, and a join would have to
+ * project every column under an alias (rule 8) and change that mapping for one
+ * optional pair of numbers. Aliased explicitly all the same, because the join
+ * crosses two tables.
+ */
+export async function listAnnotationWindows(eventId: number): Promise<Map<number, TimeWindow>> {
+  const rows = await db
+    .select({
+      annotationId: sql<number>`${annotationWindows.annotationId}`.as("window_annotation_id"),
+      startMs: sql<number>`${annotationWindows.startMs}`.as("window_start_ms"),
+      endMs: sql<number>`${annotationWindows.endMs}`.as("window_end_ms"),
+    })
+    .from(annotationWindows)
+    .innerJoin(annotations, eq(annotationWindows.annotationId, annotations.id))
+    .where(eq(annotations.eventId, eventId));
+
+  return new Map(rows.map((row) => [row.annotationId, { startMs: row.startMs, endMs: row.endMs }]));
+}
+
+/**
+ * Gives a drawing a range of its own, or replaces the one it has.
+ *
+ * `onConflictDoUpdate` because the row is the fact: a second range for the same
+ * drawing is a correction, not a duplicate.
+ */
+export async function setAnnotationWindow(
+  annotationId: number,
+  startMs: number,
+  endMs: number,
+): Promise<void> {
+  const start = Math.round(Math.min(startMs, endMs));
+  const end = Math.round(Math.max(startMs, endMs));
+  await db
+    .insert(annotationWindows)
+    .values({ annotationId, startMs: start, endMs: end })
+    .onConflictDoUpdate({
+      target: annotationWindows.annotationId,
+      set: { startMs: start, endMs: end },
+    });
+}
+
+/** Returns a drawing to the window mode it had, by removing its own range. */
+export async function clearAnnotationWindow(annotationId: number): Promise<void> {
+  await db.delete(annotationWindows).where(eq(annotationWindows.annotationId, annotationId));
 }
 
 export async function createAnnotation(input: NewAnnotation): Promise<Annotation> {
