@@ -174,7 +174,12 @@ export function AppShell() {
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-border bg-card p-4">
-          <Tabs defaultValue="events">
+          {/*
+            `activationMode="manual"`: the arrow keys move focus along the tab row
+            but do not select, because they are also the transport's seek keys.
+            Automatic activation meant a seek switched the panel (2026-09-14).
+          */}
+          <Tabs defaultValue="events" activationMode="manual">
             {/* Each tab is as wide as its own label, and the row scrolls when
                 they do not fit — with a chevron when something is hidden. */}
             <ScrollingTabsList>
